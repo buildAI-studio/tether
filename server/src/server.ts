@@ -12,6 +12,7 @@ import type Database from "better-sqlite3";
 import { insertSpan } from "./db.js";
 import { getRun, listRuns } from "./runs.js";
 import { getHarnessView } from "./harness.js";
+import { getCompositionView } from "./composition.js";
 import { getCoverage } from "./coverage.js";
 import { getUsage } from "./analytics.js";
 import { renderDetailFragment, renderEmptyDetailPanel } from "./templates/flight-recorder.js";
@@ -399,6 +400,23 @@ export function createTetherServer(db: Database.Database, options: { pluginsRoot
 			if (traceId === null) return;
 			try {
 				const view = getHarnessView(db, traceId);
+				if (!view) {
+					sendError(res, 404, "run not found");
+					return;
+				}
+				res.writeHead(200, { "Content-Type": "application/json" });
+				res.end(JSON.stringify(view));
+			} catch (err) {
+				sendError(res, 500, (err as Error).message);
+			}
+			return;
+		}
+
+		if (req.method === "GET" && pathname.startsWith("/api/v1/composition/")) {
+			const traceId = decodeTraceIdOr400(pathname.slice("/api/v1/composition/".length), res);
+			if (traceId === null) return;
+			try {
+				const view = getCompositionView(db, traceId);
 				if (!view) {
 					sendError(res, 404, "run not found");
 					return;

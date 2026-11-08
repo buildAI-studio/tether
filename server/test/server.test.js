@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { createServer as createHttpServer } from "node:http";
 import { execFileSync } from "node:child_process";
-import { openDatabase, countTraces } from "../dist/db.js";
+import { openDatabase, countTraces, insertSpan } from "../dist/db.js";
 import { createTetherServer } from "../dist/server.js";
 
 function makeFixturePluginsRoot() {
@@ -197,6 +197,48 @@ describe("GET /api/v1/harness/:traceId", () => {
 	test("404s for an unknown traceId", async () => {
 		await withServer(async ({ port }) => {
 			const res = await fetch(`http://127.0.0.1:${port}/api/v1/harness/${"z".repeat(32)}`);
+			assert.equal(res.status, 404);
+		});
+	});
+});
+
+function compositionAttachmentSpan(traceId, spanId) {
+	const attrs = {
+		"gen_ai.harness.attachment.source": "pre_tool_use_hook",
+		"gen_ai.harness.attachment.kind": "tool_file",
+		"gen_ai.harness.attachment.name_or_path": "/a/b.ts",
+		"gen_ai.harness.attachment.size_bytes": 7,
+		"gen_ai.harness.attachment.session_id": "sess-1",
+	};
+	const raw = JSON.stringify({
+		attributes: Object.entries(attrs).map(([key, v]) => ({
+			key, value: typeof v === "number" ? { intValue: String(v) } : { stringValue: v },
+		})),
+		status: { code: 1 },
+	});
+	return { traceId, spanId, parentSpanId: "parent-placeholder", name: "composition_attachment",
+		startTimeUnixNano: "1700000000000000000", endTimeUnixNano: "1700000000000000000", raw };
+}
+
+describe("GET /api/v1/composition/:traceId", () => {
+	test("returns the composition view as JSON", async () => {
+		await withServer(async ({ db, port }) => {
+			const traceId = "c".repeat(32);
+			insertSpan(db, compositionAttachmentSpan(traceId, "d".repeat(16)));
+			const res = await fetch(`http://127.0.0.1:${port}/api/v1/composition/${traceId}`);
+			assert.equal(res.status, 200);
+			assert.equal(res.headers.get("content-type"), "application/json");
+			const body = await res.json();
+			assert.equal(body.entries.length, 1);
+			assert.equal(body.entries[0].nameOrPath, "/a/b.ts");
+			assert.equal(body.entries[0].kind, "tool_file");
+			assert.equal(body.entries[0].sessionId, "sess-1");
+		});
+	});
+
+	test("404s for an unknown traceId", async () => {
+		await withServer(async ({ port }) => {
+			const res = await fetch(`http://127.0.0.1:${port}/api/v1/composition/${"z".repeat(32)}`);
 			assert.equal(res.status, 404);
 		});
 	});
