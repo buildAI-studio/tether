@@ -369,13 +369,14 @@ Resolved by the 2026-11-09 documentation spike (§1 has the detail):
 
 Still open, genuinely undecided:
 
-- **Empirical confirmation**: the spike above is doc-verified, not
-  live-captured (worktree-isolation blocked spawning a nested session to
-  inspect real payloads — not a restriction that applies outside this
-  background job's sandbox). Before locking the wire format in the plan,
-  actually run a scoped hook logger once in a normal environment and
-  diff its output against the documented shapes above, especially
-  whether `tool_name` is literally `"Skill"` for an auto-triggered skill.
+- **Empirical confirmation**: ~~the spike above is doc-verified, not
+  live-captured~~ — resolved during the final whole-branch review of the
+  implementation (2026-11-09): the reviewer read the user's own real
+  local Claude Code transcripts and confirmed `tool_name` is literally
+  `"Skill"` with its argument under `tool_input.skill` (605/605 matches
+  in local data), and that `hook_success` records carry the exact fields
+  `scanTranscriptForAttachments` expects. Both doc-derived assumptions
+  held.
 - **Ingestion shape**: confirm whether composition events reuse the
   existing OTLP span/event pipe with a new attribute namespace
   (`gen_ai.harness.attachment.*`) versus a dedicated endpoint — reusing
@@ -384,3 +385,35 @@ Still open, genuinely undecided:
 - **UI placement**: new tab in the shell vs. augmenting Harness anatomy —
   lean toward a new tab (my call, stated here so it can be revisited), not
   agreed upon with the user beyond this document.
+
+## Implementation status (as of 2026-11-09)
+
+§1's hook capture mechanism shipped — `mcp/src/hooks/{transcript,capture,
+log,run,cli}.ts`, plan `docs/superpowers/plans/2026-11-09-context-
+composition-hook-capture.md`. Local JSONL capture only, as scoped; §2
+(network delivery), §3's UI, §5 (Trail), and server-side composition API
+are still not built.
+
+**A real gap the spec's own text didn't anticipate, found by the final
+whole-branch review against the user's actual local transcripts, not
+caught by the earlier doc-only spike:** "any hookEvent, any hookName" (as
+written in §1 above) does not fully hold in what shipped. Claude Code
+records a hook's invocation in more than one shape depending on which
+event fired — `SessionStart`'s injected context is logged as a
+`hook_success` record (the shape `transcript.ts` parses), but at least
+one other event (`PostToolUse`, observed in real local data) logs its
+injected context as a differently-shaped `hook_additional_context` record
+(`content: string[]`, no `stdout`/`command`/`exitCode`) that the shipped
+parser does not recognize and silently skips. v1 therefore only reliably
+captures `SessionStart`-sourced silent attachments; attachments injected
+by other hook events are a known, documented (in `mcp/README.md`), not-
+yet-captured gap. Parsing `hook_additional_context` too — with real field
+data in hand this time, not doc inference — is the natural next increment
+of this same mechanism, not a new design.
+
+Also shipped, beyond the original plan's literal text, because the final
+review found the plan itself had under-delivered against this very
+document: `AttachmentEntry.sessionId` and a session-keyed offset sidecar
+(§3's schema said entries would be "tagged with the session id" and the
+sidecar "keyed by `session_id`" — the first implementation dropped both;
+fixed before merge, see the plan's ledger for detail).
