@@ -390,9 +390,32 @@ Still open, genuinely undecided:
 
 §1's hook capture mechanism shipped — `mcp/src/hooks/{transcript,capture,
 log,run,cli}.ts`, plan `docs/superpowers/plans/2026-11-09-context-
-composition-hook-capture.md`. Local JSONL capture only, as scoped; §2
-(network delivery), §3's UI, §5 (Trail), and server-side composition API
-are still not built.
+composition-hook-capture.md`.
+
+§2's live-delivery path and the server half of §3 also shipped —
+`mcp/src/hooks/deliver.ts` (OTLP span construction + best-effort,
+concurrently-dispatched, ~2-second-bounded delivery to `TRAIL_URL`) and
+`server/src/composition.ts` + `GET /api/v1/composition/:traceId`, plan
+`docs/superpowers/plans/2026-11-09-composition-server-ingestion.md`. The
+composition view is deliberately independent of `getRun`/`listRuns`'s
+root-span requirement — the point of the whole feature — and every
+composition span carries a deterministic non-null `parentSpanId` so it
+can never leak into the existing run list. A composition span's `traceId`
+is derived from the Claude Code session id (32 hex, dashes stripped) —
+a different id space from a run's random `traceId` — documented in
+`server/README.md`; a missing/malformed session id falls back to a
+random traceId, making that entry unreachable via the API (the local
+JSONL log remains the only record for it).
+
+§3's UI panel and §5 (Trail-side rendering, a hosted relay) are still not
+built — confirmed out of scope for the server-ingestion plan, by design.
+Known follow-ups from that plan's final review, not yet done: batching
+multiple entries into one OTLP request instead of one HTTP POST per
+entry; a cross-package integration test that actually posts an
+`mcp`-built payload through `/traces` and reads it back via
+`/api/v1/composition` (today each package's tests construct its half of
+the wire format by hand, so nothing yet proves the two sides' attribute
+names stay in sync beyond careful reading).
 
 **A real gap the spec's own text didn't anticipate, found by the final
 whole-branch review against the user's actual local transcripts, not
