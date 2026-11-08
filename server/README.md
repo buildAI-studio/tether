@@ -132,6 +132,12 @@ prefix (a breaking change would ship as `/api/v2/*`):
   `trailai-mcp` 0.4.0.
 - `GET /api/v1/harness/:traceId` — that run's harness: skills, sub-agents,
   MCP servers.
+- `GET /api/v1/composition/:traceId` — the composition entries recorded for a
+  trace by the `trailai-mcp` hooks (skills, files, MCP servers, and
+  hook-injected context). This route works even for a trace with no completed
+  run: a crashed or still-running session never sends the root span that
+  `/api/v1/runs/:traceId` needs, so this is the only view of its composition
+  data. No UI consumes it yet.
 - `GET /api/v1/analytics` — usage aggregated across every run in the store.
 
 Unknown `traceId` gives a 404 with `{ "ok": false, "error": "..." }`.

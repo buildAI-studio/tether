@@ -179,11 +179,20 @@ the log falls back to the session's `cwd`. A small offset file
 resumes where it left off instead of re-reading the whole transcript on every
 hook call.
 
-### Local only in this version
+### Live delivery to Tether or Trail
 
-Nothing is sent over the network yet. The composition log stays on the
-machine that ran the session. Delivering it to Tether or Trail is a later
-step, so for now the file is the whole output.
+Each composition entry is also delivered live, best-effort, to the same
+`TRAIL_URL` the MCP server itself uses: the local Tether server by default
+(`http://127.0.0.1:4319`, no keys), or Trail Cloud when `TRAIL_URL` and the
+keys are configured. This is in addition to the local log, not instead of it.
+`trail-composition.jsonl` remains the durable record whether or not delivery
+succeeds.
+
+Delivery is bounded by a ~2-second timeout budget per entry. Entries are sent
+concurrently, so the hook adds about that much latency in total, not per entry.
+Delivery failure is silent: an unreachable server, a timeout, or a non-2xx
+response is discarded. It never changes the hook's exit code and never affects
+the agent's tool-call flow.
 
 ### Redaction and truncation
 
