@@ -100,6 +100,95 @@ Add an instruction to your agent's project rules (e.g. `CLAUDE.md` /
 > `trail_log_llm_call`, and failures with `trail_log_exception`. When the task
 > completes, call `trail_finish_run` with a one-line summary.
 
+## Composition capture (hooks)
+
+`trailai-mcp hook <event>` is a subcommand Claude Code's own hooks can call.
+It records two things into a local log for each session:
+
+- **Skills and files actually used.** Skill invocations, slash-command
+  expansions, and the file/tool attachments the harness reports in the
+  transcript.
+- **Content a hook silently injected into context.** Any text a hook returns
+  as `additionalContext` (or equivalent) is captured from the transcript,
+  whether or not the agent ever mentions it.
+
+Why hooks rather than the MCP tools: the agent self-reporting what it loaded
+is unreliable, and background or cloud sessions can't be watched live. Hooks
+run inside Claude Code regardless of what the agent chooses to say, so the
+record reflects what actually reached the context window.
+
+### Register the hooks
+
+Add this to your project's `.claude/settings.json` (or `~/.claude/settings.json`
+for every project):
+
+```json
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          { "type": "command", "command": "npx -y trailai-mcp hook session-start" }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          { "type": "command", "command": "npx -y trailai-mcp hook pre-tool-use" }
+        ]
+      }
+    ],
+    "UserPromptExpansion": [
+      {
+        "hooks": [
+          { "type": "command", "command": "npx -y trailai-mcp hook user-prompt-expansion" }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          { "type": "command", "command": "npx -y trailai-mcp hook stop" }
+        ]
+      }
+    ]
+  }
+}
+```
+
+The event argument must be one of `session-start`, `pre-tool-use`,
+`user-prompt-expansion`, or `stop`. Each hook reads its payload from stdin. Every event also
+scans the session transcript for hook-injected context recorded since the last
+call, so the order of events doesn't matter. Narrow the `PreToolUse` `matcher` (for example to `Read|Edit|Write|Skill`)
+if you want to skip the process launch on tools you don't need to track.
+
+### Where the output lands
+
+Entries are appended to `trail-composition.jsonl` in the session's
+`scratchpad_dir`. Older Claude Code versions don't send `scratchpad_dir`, so
+the log falls back to the session's `cwd`. A small offset file
+(`trail-composition.offset.json`) sits next to it so transcript scanning
+resumes where it left off instead of re-reading the whole transcript on every
+hook call.
+
+### Local only in this version
+
+Nothing is sent over the network yet. The composition log stays on the
+machine that ran the session. Delivering it to Tether or Trail is a later
+step, so for now the file is the whole output.
+
+### Redaction and truncation
+
+Content previews go through the same `sanitize()` pass used for diffs and
+other structured payloads: known secret shapes (API keys, bearer tokens,
+password- or token-shaped key/value pairs) are replaced with `[REDACTED]`, and
+each preview is capped at 16KB with a `…[truncated, Nb]` marker showing the
+original size. This is best-effort pattern matching, not a guarantee. The
+recorded `sizeBytes` reflects the full untruncated content, so you can still
+tell how large an injection was even when the preview is cut.
+
 ## What's new in 0.4.0
 
 `trail_log_step` accepts an optional `diffs` array — `{ path, diff }` entries
