@@ -113,4 +113,27 @@ describe("the hook CLI subcommand (end-to-end)", () => {
 		assert.equal(result, "");
 		assert.ok(existsSync(join(scratch, COMPOSITION_LOG_FILENAME)), "the hook path itself must still have run and written its log");
 	});
+
+	test("runHook still writes the local log even when delivery is unreachable", () => {
+		// TRAIL_URL points at a black-hole address (no RST, no ICMP
+		// unreachable) rather than a fast-refused one, so this exercises
+		// deliverBestEffort's own timeout racing sendSpan, not just a fetch
+		// that fails instantly. The hook CLI subcommand must still exit 0
+		// with empty stdout and the local JSONL log -- the durable source of
+		// truth -- must still be written, within a bounded wall-clock time
+		// (asserted via execFileSync's own `timeout`, which would throw if
+		// the process hung instead of exiting via index.ts's process.exit(0)).
+		const dir = mkdtempSync(join(tmpdir(), "trail-cli-unreachable-"));
+		const payload = JSON.stringify({ scratchpad_dir: dir, session_id: "s1", tool_name: "Read", tool_input: { file_path: "/z.ts" } });
+		const stdout = execFileSync(process.execPath, [new URL("../dist/index.js", import.meta.url).pathname, "hook", "pre-tool-use"], {
+			input: payload,
+			encoding: "utf8",
+			timeout: 15000,
+			env: { ...process.env, TRAIL_URL: "http://10.255.255.1" },
+		});
+		assert.equal(stdout, "");
+		const lines = readFileSync(join(dir, COMPOSITION_LOG_FILENAME), "utf8").trim().split("\n");
+		assert.equal(lines.length, 1);
+		assert.equal(JSON.parse(lines[0]).nameOrPath, "/z.ts");
+	});
 });

@@ -16,6 +16,7 @@ import { fromPreToolUse, fromUserPromptExpansion, fromTranscriptAttachment } fro
 import type { AttachmentEntry } from "./capture.js";
 import { scanTranscriptForAttachments } from "./transcript.js";
 import { resolveLogDir, readOffset, writeOffset, appendEntries } from "./log.js";
+import { configFromEnv, deliverBestEffort } from "./deliver.js";
 
 export async function runHook(eventArg: string, stdinText: string): Promise<void> {
 	try {
@@ -62,6 +63,14 @@ export async function runHook(eventArg: string, stdinText: string): Promise<void
 		if (typeof transcriptPath === "string" && newOffset !== undefined) {
 			writeOffset(logDir, sessionId, transcriptPath, newOffset);
 		}
+
+		// Local capture succeeding is the precondition for attempting
+		// delivery, not the other way around -- this line only runs once
+		// appendEntries/writeOffset above have already completed. The outer
+		// .catch is a backstop in case deliverBestEffort somehow still
+		// throws; it shouldn't, given its own internal try/catch, but this
+		// function's whole-body guarantee doesn't rely on that alone.
+		await deliverBestEffort(configFromEnv(), entries).catch(() => {});
 	} catch {
 		// never throw -- a hook crash or bad stdout would corrupt Claude Code's
 		// own hook-driven permission/context flow.

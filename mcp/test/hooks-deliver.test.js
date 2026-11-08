@@ -1,6 +1,7 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { traceIdFromSessionId, buildAttachmentSpan } from "../dist/hooks/deliver.js";
+import { createServer } from "node:http";
+import { traceIdFromSessionId, buildAttachmentSpan, deliverBestEffort } from "../dist/hooks/deliver.js";
 
 describe("traceIdFromSessionId", () => {
 	test("strips dashes from a UUID session id", () => {
@@ -47,5 +48,33 @@ describe("buildAttachmentSpan", () => {
 	test("omits contentPreview attribute when the entry has none", () => {
 		const span = buildAttachmentSpan(entry);
 		assert.equal(span.attributes["gen_ai.harness.attachment.content_preview"], undefined);
+	});
+});
+
+describe("deliverBestEffort", () => {
+	test("posts each entry to a reachable server", async () => {
+		const received = [];
+		const server = createServer((req, res) => {
+			let body = "";
+			req.on("data", (c) => (body += c));
+			req.on("end", () => { received.push(JSON.parse(body)); res.writeHead(200).end(); });
+		});
+		await new Promise((resolve) => server.listen(0, resolve));
+		const port = server.address().port;
+		const entry = { source: "pre_tool_use_hook", kind: "tool_file", nameOrPath: "/a.ts",
+			sizeBytes: 5, timestamp: "2026-11-09T00:00:00.000Z", sessionId: "s1" };
+		await deliverBestEffort({ url: `http://127.0.0.1:${port}`, environment: "default", serviceName: "test" }, [entry]);
+		assert.equal(received.length, 1);
+		server.close();
+	});
+
+	test("does not throw and resolves within the timeout budget when the endpoint is unreachable", async () => {
+		const entry = { source: "pre_tool_use_hook", kind: "tool_file", nameOrPath: "/a.ts",
+			sizeBytes: 5, timestamp: "2026-11-09T00:00:00.000Z", sessionId: "s1" };
+		const start = Date.now();
+		await assert.doesNotReject(() =>
+			deliverBestEffort({ url: "http://10.255.255.1", environment: "default", serviceName: "test" }, [entry], 500),
+		);
+		assert.ok(Date.now() - start < 2000, "delivery must not block well past its own timeout budget");
 	});
 });
