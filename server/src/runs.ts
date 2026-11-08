@@ -110,7 +110,7 @@ function inferStepType(attrs: AttrMap): StepType {
 }
 
 /** Parses a nanosecond-timestamp string to a bigint, returning null (never throwing) on malformed input. */
-function toNs(s: string): bigint | null {
+export function toNs(s: string): bigint | null {
 	try {
 		return BigInt(s);
 	} catch {

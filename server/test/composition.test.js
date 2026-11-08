@@ -61,4 +61,14 @@ describe("getCompositionView", () => {
 		const runs = listRuns(db, 50);
 		assert.equal(runs.some((r) => r.traceId === "t4"), false);
 	});
+
+	test("a malformed startTimeUnixNano degrades that entry's timestamp instead of throwing", () => {
+		const db = openDatabase(":memory:");
+		const span = attachmentSpan("t5", "s1", "parent-placeholder");
+		span.startTimeUnixNano = "not-a-number";
+		insertSpan(db, span);
+		const view = getCompositionView(db, "t5");
+		assert.equal(view.entries.length, 1);
+		assert.equal(view.entries[0].timestamp, "");
+	});
 });

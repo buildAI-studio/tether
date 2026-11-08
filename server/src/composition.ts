@@ -8,7 +8,7 @@
  */
 
 import type Database from "better-sqlite3";
-import { parseRaw, asString, toIsoOrEmpty } from "./runs.js";
+import { parseRaw, asString, toIsoOrEmpty, toNs } from "./runs.js";
 
 export interface CompositionEntry {
 	source: string;
@@ -55,6 +55,11 @@ export function getCompositionView(db: Database.Database, traceId: string): Comp
 		if (!kind) continue; // not an attachment span (unauthenticated ingest -- treat as "not ours" rather than throw)
 
 		const contentPreview = asString(parsed.attrs["gen_ai.harness.attachment.content_preview"]);
+		// row.startTimeUnixNano arrives from unauthenticated ingest with zero format validation --
+		// toNs degrades a malformed value to null (rather than BigInt() throwing a SyntaxError) so one
+		// bad span can't crash the whole view, matching toIsoOrEmpty's own out-of-range-value-to-""
+		// convention.
+		const startNs = toNs(row.startTimeUnixNano);
 		entries.push({
 			source: asString(parsed.attrs["gen_ai.harness.attachment.source"]) ?? "",
 			kind,
@@ -62,7 +67,7 @@ export function getCompositionView(db: Database.Database, traceId: string): Comp
 			sizeBytes: typeof parsed.attrs["gen_ai.harness.attachment.size_bytes"] === "number" ? (parsed.attrs["gen_ai.harness.attachment.size_bytes"] as number) : 0,
 			...(contentPreview !== undefined ? { contentPreview } : {}),
 			sessionId: asString(parsed.attrs["gen_ai.harness.attachment.session_id"]) ?? "",
-			timestamp: toIsoOrEmpty(BigInt(row.startTimeUnixNano)),
+			timestamp: startNs !== null ? toIsoOrEmpty(startNs) : "",
 		});
 	}
 
