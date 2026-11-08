@@ -20,10 +20,36 @@
  * tests without this file's stdio transport connection running.
  */
 
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { TrailConfig } from "./otlp.js";
-import { JudgeConfig } from "./judge.js";
-import { buildTrailServer } from "./tools.js";
+import type { TrailConfig } from "./otlp.js";
+import type { JudgeConfig } from "./judge.js";
+
+if (process.argv[2] === "hook") {
+	// This hook's stdout can be read by Claude Code as live control data
+	// (PreToolUse's JSON-shaped stdout alters its own permission flow;
+	// SessionStart's stdout is injected as context), so this path must
+	// always exit 0, even if the dynamic import itself fails (e.g. a
+	// corrupted/partial install missing dist/hooks/cli.js) or main()
+	// rejects for a reason not already caught inside it.
+	//
+	// Crucially, this branch must never cause the MCP server stack
+	// (@modelcontextprotocol/sdk, otlp.js, judge.js, tools.js) to load --
+	// under ESM, a module's static top-level imports all run before any of
+	// its own top-level code, including this `if` check, so those four
+	// imports are deliberately kept as dynamic `import()` calls below,
+	// reached only from the non-hook branch after this short-circuit. A
+	// broken/partial install missing @modelcontextprotocol/sdk (and thus
+	// unable to run the server) must still let the hook path exit 0.
+	try {
+		const { main } = await import("./hooks/cli.js");
+		await main(process.argv.slice(3));
+	} catch {
+		// never let this subcommand exit non-zero or crash with output.
+	}
+	process.exit(0);
+}
+
+const { StdioServerTransport } = await import("@modelcontextprotocol/sdk/server/stdio.js");
+const { buildTrailServer } = await import("./tools.js");
 
 const DEFAULT_LOCAL_URL = "http://127.0.0.1:4319";
 
