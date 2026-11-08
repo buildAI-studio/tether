@@ -13,9 +13,16 @@ so Tether's self-reporting model is structurally blind to them.
 This worry is sharpest for Claude Code's own cloud/background sessions —
 sessions running in a remote sandbox, unattended, that can modify the
 user's software without anyone watching live. (Not to be confused with
-"Trail Cloud," the separate paid SaaS for hosting Tether's ingestion
-endpoint — unrelated to this design.) It also applies, with lower stakes,
-to local interactive sessions.
+"Trail Cloud," the separate paid SaaS sibling product that hosts the same
+OTLP ingestion endpoint — a different thing from the background/cloud
+*Claude Code sessions* this design is about, though §5 revisits Trail
+Cloud as a plausible transport for exactly this case.) It also applies,
+with lower stakes, to local interactive sessions.
+
+This design treats Tether and Trail as one shared problem to solve
+rather than a hard boundary: where the better fix touches Trail (its
+shared ingestion pipe, or eventually its UI), that's in scope, not ruled
+out by which repo currently owns the code.
 
 Goal: give the user a complete, trustworthy record — per run — of
 everything that got attached to the agent's context, however it got
@@ -77,12 +84,14 @@ without depending on the agent's cooperation to report it.
 ## Non-goals
 
 - Blocking, filtering, or gating what gets attached. This is observation
-  only. Enforcement/guardrails are explicitly Trail's (proprietary)
-  territory per the project's OSS-vs-enterprise split — Tether does not
-  grow a policy layer here.
-- Operating a hosted relay/tunnel service for background sessions. We
-  document the deployment options; standing one up is the user's choice,
-  not something this project ships.
+  only, because that's what was asked for — not because of a repo
+  boundary. (Enforcement is a plausible later feature; nothing here rules
+  it out, it's just not this project.)
+- Building a *new* hosted relay service from scratch. Trail Cloud already
+  is a publicly-reachable hosted ingestion endpoint on the same OTLP pipe
+  (confirmed: `trail/server/src/controllers/traces.c.ts` ingests the same
+  proto-shaped spans Tether does) — so for the reachability problem, using
+  it is the answer, not a new thing to build. See §5.
 - Patching or forking Claude Code. This uses only hook and MCP extension
   points Claude Code already exposes.
 - A push-based (WebSocket/SSE) live UI in this phase. The existing 5s-poll
@@ -223,20 +232,33 @@ conventions from Phase 1 (16KB per-string-leaf truncation, secret-pattern
 redaction) rather than inventing a second redaction mechanism for this new
 input path.
 
-### 5. Reachability / deployment (documented, not built)
+### 5. Reachability / deployment
 
-Three options, increasing effort, documented for the user to choose from:
+The reachability problem is specific to background/cloud sessions: a
+sandbox can't reach a `localhost`-only Tether instance. Three options,
+in increasing effort:
 
-1. **After-the-fact, zero network dependency (default)** — the local log
-   ships with the workspace; the user reviews it via their local Tether
-   UI once it's reachable again. No new infrastructure required.
+1. **After-the-fact, zero network dependency (default, always works)** —
+   the local log ships with the workspace; reviewed via the local Tether
+   UI once it's reachable again. No infrastructure needed, works even
+   with Tether alone.
 2. **Self-hosted public instance** — `trailai-tether` run on a reachable
-   host (VPS, `ngrok`/`cloudflared` tunnel, etc.), `TRAIL_URL` set in the
-   background session's environment so the hook's best-effort POST
-   reaches it live.
-3. **Trail Cloud** — same mechanism, pointed at the hosted SaaS instead of
-   self-hosting. Only relevant if the user already wants a Trail Cloud
-   account; this project does not build or operate that service.
+   host (VPS, `ngrok`/`cloudflared` tunnel, etc.), `TRAIL_URL` pointed at
+   it so the hook's best-effort POST reaches it live. Operationally
+   fiddly (the user runs and exposes their own server).
+3. **Trail Cloud as the transport** — the real answer for "I want this
+   live for background sessions without babysitting a tunnel." Since
+   Trail already ingests the same OTLP shape Tether does, pointing
+   `TRAIL_URL`/keys at Trail Cloud gets live delivery with no new backend
+   work — Trail is already a publicly-reachable ingestion endpoint by
+   design. What Trail does *not* have today is anywhere to render the
+   data: there is no harness-manifest/coverage concept at all in
+   `trail/web-client` or `trail/server` yet (verified — zero hits for
+   "harness"/"manifest"/"coverage"). Porting the harness-anatomy/coverage
+   concept, and then this composition view, to Trail is a real option
+   worth doing, but it's a separate, larger body of work from what this
+   document scopes — flagged here as a deliberate option, not folded into
+   this plan, so it isn't lost or quietly treated as off-limits.
 
 ## What's left to the builder
 
