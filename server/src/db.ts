@@ -27,11 +27,18 @@ export function resolveDataDir(): string {
 	return envPaths("trailai-tether", { suffix: "" }).data;
 }
 
-/** Opens (creating if needed) the spans database at the given path. Safe to call repeatedly on the same path. */
+/** Opens (creating if needed) the spans database at the given path. Safe to call repeatedly on the same path.
+ * `:memory:` is better-sqlite3's special in-process path (used by tests) -- it has no filesystem
+ * entry, so the directory-create/permission-lockdown steps below (which only make sense for a real
+ * file) are skipped for it. */
 export function openDatabase(dbPath: string): Database.Database {
-	mkdirSync(dirname(dbPath), { recursive: true, mode: 0o700 });
+	if (dbPath !== ":memory:") {
+		mkdirSync(dirname(dbPath), { recursive: true, mode: 0o700 });
+	}
 	const db = new Database(dbPath);
-	chmodSync(dbPath, 0o600);
+	if (dbPath !== ":memory:") {
+		chmodSync(dbPath, 0o600);
+	}
 	db.exec(`
 		CREATE TABLE IF NOT EXISTS spans (
 			traceId TEXT NOT NULL,
