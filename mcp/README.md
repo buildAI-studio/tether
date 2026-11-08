@@ -105,12 +105,13 @@ Add an instruction to your agent's project rules (e.g. `CLAUDE.md` /
 `trailai-mcp hook <event>` is a subcommand Claude Code's own hooks can call.
 It records two things into a local log for each session:
 
-- **Skills and files actually used.** Skill invocations, slash-command
-  expansions, and the file/tool attachments the harness reports in the
-  transcript.
+- **Skills, slash-command expansions, and files/MCP servers touched by tool
+  calls.** Recorded from the `PreToolUse` and `UserPromptExpansion` hook
+  payloads.
 - **Content a hook silently injected into context.** Any text a hook returns
-  as `additionalContext` (or equivalent) is captured from the transcript,
-  whether or not the agent ever mentions it.
+  as `additionalContext` (or equivalent) is read back from the session
+  transcript, whether that hook is yours or a third party's, and whether or
+  not the agent ever mentions it.
 
 Why hooks rather than the MCP tools: the agent self-reporting what it loaded
 is unreliable, and background or cloud sessions can't be watched live. Hooks
@@ -181,11 +182,11 @@ step, so for now the file is the whole output.
 
 ### Redaction and truncation
 
-Content previews go through the same `sanitize()` pass used for diffs and
-other structured payloads: known secret shapes (API keys, bearer tokens,
-password- or token-shaped key/value pairs) are replaced with `[REDACTED]`, and
-each preview is capped at 16KB with a `…[truncated, Nb]` marker showing the
-original size. This is best-effort pattern matching, not a guarantee. The
+Content previews go through the same secret-pattern redaction used for diffs
+(known secret shapes such as API keys, bearer tokens, and password- or
+token-shaped key/value pairs are replaced with `[REDACTED]`), then are capped at
+16KB with a `…[truncated, Nb]` marker showing the original size. Diffs use their
+own hunk-level size budgets instead of this 16KB cap. This is best-effort pattern matching, not a guarantee. The
 recorded `sizeBytes` reflects the full untruncated content, so you can still
 tell how large an injection was even when the preview is cut.
 
