@@ -25,6 +25,12 @@ import { TrailConfig } from "./otlp.js";
 import { JudgeConfig } from "./judge.js";
 import { buildTrailServer } from "./tools.js";
 
+if (process.argv[2] === "hook") {
+	const { main } = await import("./hooks/cli.js");
+	await main(process.argv.slice(3));
+	process.exit(0);
+}
+
 const DEFAULT_LOCAL_URL = "http://127.0.0.1:4319";
 
 const cfg: TrailConfig = {
