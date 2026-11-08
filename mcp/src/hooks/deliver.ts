@@ -116,6 +116,13 @@ async function sendWithTimeout(cfg: TrailConfig, span: SpanInput, timeoutMs: num
  * network error, non-2xx response) is swallowed so one bad entry or one
  * unreachable server can't stop the rest of the entries from being
  * attempted, and can't propagate past this function at all.
+ *
+ * Entries are dispatched concurrently, not sequentially: a transcript scan
+ * or a backlog of unconsumed entries can hand this function an unbounded
+ * number of entries in one call, and this function's whole point is to add
+ * at most ~timeoutMs of latency to the hook regardless of how many entries
+ * there are. A sequential loop would instead cost N * timeoutMs against an
+ * unreachable server, which blows that budget.
  */
 export async function deliverBestEffort(
 	cfg: TrailConfig,
@@ -123,13 +130,16 @@ export async function deliverBestEffort(
 	timeoutMs = 2000,
 ): Promise<void> {
 	try {
-		for (const entry of entries) {
-			try {
-				await sendWithTimeout(cfg, buildAttachmentSpan(entry), timeoutMs);
-			} catch {
-				// best-effort: one entry's failure must not stop the rest.
-			}
-		}
+		await Promise.allSettled(
+			entries.map((entry) =>
+				sendWithTimeout(cfg, buildAttachmentSpan(entry), timeoutMs).catch(() => {
+					// best-effort: one entry's failure must not stop the rest.
+					// (Promise.allSettled already tolerates rejections on its
+					// own; this additionally keeps each entry's own span
+					// construction/dispatch fully isolated from its siblings.)
+				}),
+			),
+		);
 	} catch {
 		// best-effort: discard any delivery failure entirely.
 	}

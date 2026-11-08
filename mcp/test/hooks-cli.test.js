@@ -3,9 +3,32 @@ import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, writeFileSync, existsSync, cpSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
+import { createServer } from "node:http";
 import { runHook } from "../dist/hooks/run.js";
 import { COMPOSITION_LOG_FILENAME, COMPOSITION_OFFSET_FILENAME } from "../dist/hooks/log.js";
+
+/**
+ * Like execFileSync, but non-blocking: runs the hook CLI subcommand as a
+ * child process without freezing this (parent) process's event loop.
+ * Needed whenever the test also runs an in-process HTTP server the child
+ * is expected to call back into -- execFileSync blocks synchronously until
+ * the child exits, which would starve that in-process server of any
+ * chance to actually handle the incoming request (the OS can still accept
+ * the TCP connection into its backlog, but Node's own request handler
+ * never runs until the event loop is free again).
+ */
+function runHookCli(args, { input, env }) {
+	return new Promise((resolve, reject) => {
+		const child = spawn(process.execPath, args, { env });
+		let stdout = "";
+		child.stdout.on("data", (c) => (stdout += c));
+		child.on("error", reject);
+		child.on("close", () => resolve(stdout));
+		child.stdin.write(input);
+		child.stdin.end();
+	});
+}
 
 describe("runHook", () => {
 	test("a pre-tool-use Read call produces one tool_file entry in the log", async () => {
@@ -135,5 +158,35 @@ describe("the hook CLI subcommand (end-to-end)", () => {
 		const lines = readFileSync(join(dir, COMPOSITION_LOG_FILENAME), "utf8").trim().split("\n");
 		assert.equal(lines.length, 1);
 		assert.equal(JSON.parse(lines[0]).nameOrPath, "/z.ts");
+	});
+
+	test("runHook actually delivers to TRAIL_URL when it's reachable", async () => {
+		// Regression guard for the run.ts wiring itself: the "unreachable"
+		// test above passes identically whether or not run.ts calls
+		// deliverBestEffort at all, since it only checks local-log
+		// durability. This proves the CLI subcommand really does POST to
+		// TRAIL_URL when there's a server there to receive it.
+		const received = [];
+		const server = createServer((req, res) => {
+			let body = "";
+			req.on("data", (c) => (body += c));
+			req.on("end", () => {
+				received.push(body);
+				res.writeHead(200).end();
+			});
+		});
+		await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+		const port = server.address().port;
+
+		const dir = mkdtempSync(join(tmpdir(), "trail-cli-reachable-"));
+		const payload = JSON.stringify({ scratchpad_dir: dir, session_id: "s1", tool_name: "Read", tool_input: { file_path: "/w.ts" } });
+		const stdout = await runHookCli([new URL("../dist/index.js", import.meta.url).pathname, "hook", "pre-tool-use"], {
+			input: payload,
+			env: { ...process.env, TRAIL_URL: `http://127.0.0.1:${port}` },
+		});
+		assert.equal(stdout, "");
+
+		await new Promise((resolve) => server.close(resolve));
+		assert.equal(received.length, 1, "the CLI subcommand must have POSTed the composition entry to TRAIL_URL");
 	});
 });

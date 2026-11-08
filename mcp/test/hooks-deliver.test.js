@@ -77,4 +77,21 @@ describe("deliverBestEffort", () => {
 		);
 		assert.ok(Date.now() - start < 2000, "delivery must not block well past its own timeout budget");
 	});
+
+	test("multiple entries against an unreachable endpoint complete in ~one timeout budget, not N timeout budgets", async () => {
+		// Regression guard: a sequential dispatch loop would cost
+		// entries.length * timeoutMs against an unreachable server (here,
+		// 5 * 500ms = 2500ms); concurrent dispatch must cost ~timeoutMs
+		// regardless of entry count.
+		const entries = Array.from({ length: 5 }, (_, i) => ({
+			source: "pre_tool_use_hook", kind: "tool_file", nameOrPath: `/a${i}.ts`,
+			sizeBytes: 5, timestamp: "2026-11-09T00:00:00.000Z", sessionId: "s1",
+		}));
+		const start = Date.now();
+		await assert.doesNotReject(() =>
+			deliverBestEffort({ url: "http://10.255.255.1", environment: "default", serviceName: "test" }, entries, 500),
+		);
+		const elapsed = Date.now() - start;
+		assert.ok(elapsed < 1500, `expected ~one timeout budget (500ms) regardless of entry count, took ${elapsed}ms`);
+	});
 });
