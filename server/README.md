@@ -138,6 +138,20 @@ prefix (a breaking change would ship as `/api/v2/*`):
   run: a crashed or still-running session never sends the root span that
   `/api/v1/runs/:traceId` needs, so this is the only view of its composition
   data. No UI consumes it yet.
+
+  **This `traceId` is not a run's `traceId`.** A run's `traceId` is a random
+  16-byte hex id assigned by `trail_start_run`. A composition trace's
+  `traceId` is derived from the Claude Code session id instead (lowercased,
+  dashes stripped, and only used as-is when that leaves exactly 32 hex
+  characters — see `mcp/src/hooks/deliver.ts`'s `traceIdFromSessionId`) —
+  a completely different id space from a run's `traceId`. Calling this route
+  with a run's own `traceId` will essentially always 404; the only way to
+  reach a session's composition data is with that session's id (session-id
+  derived, not run-id derived). If a hook invocation's `session_id` is
+  missing or malformed (so it can't be reduced to exactly 32 hex characters),
+  its entries fall back to a random traceId instead, making them effectively
+  unreachable via this API — only the local `trail-composition.jsonl` log on
+  disk still has them. This is an accepted, documented limitation, not a bug.
 - `GET /api/v1/analytics` — usage aggregated across every run in the store.
 
 Unknown `traceId` gives a 404 with `{ "ok": false, "error": "..." }`.

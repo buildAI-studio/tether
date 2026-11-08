@@ -103,7 +103,9 @@ Add an instruction to your agent's project rules (e.g. `CLAUDE.md` /
 ## Composition capture (hooks)
 
 `trailai-mcp hook <event>` is a subcommand Claude Code's own hooks can call.
-It records two things into a local log for each session:
+It records two things into a local log for each session (and also delivers
+them live to Tether or Trail — see "Live delivery to Tether or Trail"
+below):
 
 - **Skills, slash-command expansions, and files/MCP servers touched by tool
   calls.** Recorded from the `PreToolUse` and `UserPromptExpansion` hook
@@ -170,6 +172,38 @@ if you want to skip the process launch on tools you don't need to track --
 that example drops MCP tool calls, so add `mcp__.*` to the pattern (e.g.
 `Read|Edit|Write|Skill|mcp__.*`) if you also want those tracked.
 
+Each `"command": "npx -y trailai-mcp hook <event>"` above is a separate
+process Claude Code spawns directly for that hook event — it is **not**
+the same process as the `trail` MCP server, and does not inherit whatever
+you configured for that server via `claude mcp add -e ...` or a
+`.mcp.json` `"env"` block (see "Live delivery to Tether or Trail" below
+for why that matters). To point these hooks at Trail Cloud instead of the
+local default, set the same `TRAIL_URL`/`TRAIL_PUBLIC_KEY`/`TRAIL_SECRET_KEY`
+inline on each hook's own `"command"` string, e.g.:
+
+```json
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "TRAIL_URL=https://api.trailai.dev/api/sdk/v1 TRAIL_PUBLIC_KEY=pk-... TRAIL_SECRET_KEY=sk-... npx -y trailai-mcp hook session-start"
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+applied the same way to the `PreToolUse`, `UserPromptExpansion`, and `Stop`
+entries too. Exporting the three variables in the shell that launches
+`claude` instead (e.g. in `~/.zshrc`/`~/.bashrc`) works too and avoids
+repeating them per hook, since shell-exported variables propagate to every
+child process Claude Code spawns, MCP server and hooks alike.
+
 ### Where the output lands
 
 Entries are appended to `trail-composition.jsonl` in the session's
@@ -181,18 +215,45 @@ hook call.
 
 ### Live delivery to Tether or Trail
 
-Each composition entry is also delivered live, best-effort, to the same
-`TRAIL_URL` the MCP server itself uses: the local Tether server by default
-(`http://127.0.0.1:4319`, no keys), or Trail Cloud when `TRAIL_URL` and the
-keys are configured. This is in addition to the local log, not instead of it.
+Each composition entry is also delivered live, best-effort, over HTTP(S).
+This is in addition to the local log, not instead of it —
 `trail-composition.jsonl` remains the durable record whether or not delivery
 succeeds.
 
-Delivery is bounded by a ~2-second timeout budget per entry. Entries are sent
-concurrently, so the hook adds about that much latency in total, not per entry.
-Delivery failure is silent: an unreachable server, a timeout, or a non-2xx
-response is discarded. It never changes the hook's exit code and never affects
-the agent's tool-call flow.
+**This is not the same `TRAIL_URL` config as the MCP server's.** Delivery
+reads `TRAIL_URL`, `TRAIL_PUBLIC_KEY`, `TRAIL_SECRET_KEY`, and `TRAIL_ENV`
+from the **hook subprocess's own process environment**, independently of
+whatever you configured for the MCP server via `claude mcp add -e ...` or a
+`.mcp.json` `"env"` block. Those are two different, independently-spawned
+processes: the MCP server's `-e`/`env` config applies only to the one
+long-lived `trail` MCP server process Claude Code starts, while each hook
+event spawns its own short-lived `npx -y trailai-mcp hook <event>` process
+directly (per the "Register the hooks" JSON above) — Claude Code never
+routes the MCP server's config into that subprocess. A hook subprocess only
+ever sees ordinary process environment variables: whatever was already
+exported in the shell/environment `claude` itself was launched from (which
+propagate the normal Unix way to every child process, hooks included), or
+anything set inline in that hook's own `"command"` string in
+`.claude/settings.json`.
+
+Concretely: if you configured Trail Cloud only via `claude mcp add -e
+TRAIL_URL=... -e TRAIL_PUBLIC_KEY=... -e TRAIL_SECRET_KEY=...` (or the
+equivalent `.mcp.json` `"env"` block), hooks will **not** see those values —
+they'll silently fall back to local mode (`http://127.0.0.1:4319`, no
+keys), and since delivery failure is silent by design, you won't be warned
+that this happened. To deliver composition data to Trail Cloud, set the
+same three variables for the hook process specifically, using one of the
+two options shown in "Register the hooks" above (shell-exported env vars,
+or inline on each hook's `"command"` string). With nothing configured
+either way, hooks and the MCP server happen to share the same default
+(`http://127.0.0.1:4319`, local mode, no keys) — that's a coincidence of
+both components falling back to the same default, not shared configuration.
+
+Each entry has its own ~2-second timeout, and entries are delivered
+concurrently, so the hook adds about 2 seconds of latency in total,
+regardless of how many entries there are. Delivery failure is silent: an
+unreachable server, a timeout, or a non-2xx response is discarded. It never
+changes the hook's exit code and never affects the agent's tool-call flow.
 
 ### Redaction and truncation
 

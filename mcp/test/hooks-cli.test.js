@@ -9,6 +9,22 @@ import { runHook } from "../dist/hooks/run.js";
 import { COMPOSITION_LOG_FILENAME, COMPOSITION_OFFSET_FILENAME } from "../dist/hooks/log.js";
 
 /**
+ * runHook (called directly below) and the hook CLI subcommand (spawned via
+ * execFileSync/spawn below) both end up calling deliverBestEffort, which
+ * defaults to POSTing composition spans to http://127.0.0.1:4319 when
+ * TRAIL_URL isn't set. Every test in this file except the two that
+ * deliberately exercise delivery (which set their own TRAIL_URL last,
+ * overriding this) would otherwise silently write real composition spans
+ * into a developer's actual local Tether database if one happens to be
+ * running on that default port while `npm test` runs. Point this process's
+ * TRAIL_URL at a closed port so those delivery attempts fail fast instead:
+ * direct `runHook()` calls below read this from their own process.env, and
+ * execFileSync/spawn calls that don't pass their own `env` option inherit
+ * it automatically.
+ */
+process.env.TRAIL_URL = "http://127.0.0.1:1";
+
+/**
  * Like execFileSync, but non-blocking: runs the hook CLI subcommand as a
  * child process without freezing this (parent) process's event loop.
  * Needed whenever the test also runs an in-process HTTP server the child
