@@ -1,0 +1,262 @@
+# Context composition visibility — design
+
+## Intent
+
+Tether today can show what an agent *chose* to report. It cannot show what
+got loaded into an agent's context without the agent ever reporting it —
+and that second category is exactly what worries the user: skills that
+auto-trigger, memory files, `CLAUDE.md`/project instructions, and
+hook-injected content (e.g. a `SessionStart` hook dumping skill text into
+context before the agent does anything) all happen *outside* any tool call,
+so Tether's self-reporting model is structurally blind to them.
+
+This worry is sharpest for Claude Code's own cloud/background sessions —
+sessions running in a remote sandbox, unattended, that can modify the
+user's software without anyone watching live. (Not to be confused with
+"Trail Cloud," the separate paid SaaS for hosting Tether's ingestion
+endpoint — unrelated to this design.) It also applies, with lower stakes,
+to local interactive sessions.
+
+Goal: give the user a complete, trustworthy record — per run — of
+everything that got attached to the agent's context, however it got
+there, plus everything the agent actively touched (files read/written),
+without depending on the agent's cooperation to report it.
+
+## Current state (verified against source, 2026-11-08)
+
+- All of Tether's capture is self-reported. The agent is *instructed*
+  (`mcp/README.md`: "call `trail_log_step` after EVERY tool call") to call
+  `trail_start_run` / `trail_log_step` / `trail_finish_run` — nothing
+  enforces this; an agent that skips a call simply produces no record of
+  it.
+- `trail_start_run` snapshots the harness manifest once
+  (`mcp/src/manifest.ts`: `discoverSkills`, `discoverUserSkills`,
+  `discoverSubAgents`, `discoverMcpServers`) — an inventory of what's
+  *available* on disk at session start, not what gets used.
+- "Usage" (`server/src/coverage.ts`) is a join between that manifest and
+  each step's self-reported `source_type`/`source_name`
+  (`gen_ai.harness.source_type`/`source_name` span attributes, set only
+  when the agent passes `source_type`/`source_name` to `trail_log_step` —
+  see `mcp/src/tools.ts`). No `source_type`/`source_name` means no
+  attribution, silently.
+- Structured tool-call args (rich-data-roadmap phase 1, shipped) mean a
+  self-reported `Read`/`Edit`/`Write` step already carries its file path
+  in a queryable JSON field. This covers "files the agent touched,"
+  *if* it's self-reported — it does not cover silent attachment.
+- Nothing in the current design touches Claude Code's hook system
+  (`SessionStart`, `PreToolUse`, `PostToolUse`, etc.). Hooks are
+  deterministic — Claude Code spawns them regardless of what the LLM
+  decides — but Tether has no capture path through them today.
+- Reachability: Tether defaults to `http://127.0.0.1:4319`, local-only,
+  no auth. A background/cloud session runs in a sandbox that is not the
+  user's machine, so it cannot reach that address at all. Any visibility
+  into such a session needs either a publicly-reachable Tether instance
+  or a delivery path that doesn't require live network access.
+
+## Goals
+
+1. Capture, per run, every skill that actually gets triggered or loaded —
+   independent of whether the agent remembers to self-report it.
+2. Capture, per run, everything silently attached to context outside any
+   tool call: skill auto-triggers, memory files, `CLAUDE.md`/project
+   instructions, hook-injected `additionalContext`.
+3. Capture files actively read/written during the run, closing the gaps
+   left by relying on self-report alone (same data Phase 1 already models
+   — this just adds a second, non-agent-dependent path to it).
+4. Make the capture mechanism's *ground truth* come from the harness
+   (Claude Code's hook system), not the agent's willingness to narrate
+   itself.
+5. Produce a complete per-run timeline that is reviewable with zero
+   dependency on the sandbox having live network access — a background
+   session must not lose this data just because it can't reach Tether
+   while running.
+6. Lay the mechanism out so live/streaming visibility falls out for free
+   once a reachable endpoint exists, rather than needing a second
+   mechanism later.
+
+## Non-goals
+
+- Blocking, filtering, or gating what gets attached. This is observation
+  only. Enforcement/guardrails are explicitly Trail's (proprietary)
+  territory per the project's OSS-vs-enterprise split — Tether does not
+  grow a policy layer here.
+- Operating a hosted relay/tunnel service for background sessions. We
+  document the deployment options; standing one up is the user's choice,
+  not something this project ships.
+- Patching or forking Claude Code. This uses only hook and MCP extension
+  points Claude Code already exposes.
+- A push-based (WebSocket/SSE) live UI in this phase. The existing 5s-poll
+  Flight Recorder shell is sufficient once composition data lands in the
+  database; a push UI is a separate, later improvement.
+- Parity for Cursor/Windsurf. The capture mechanism in §1 is built
+  entirely on Claude Code's own hook contract, which those clients don't
+  share. v1 is explicitly Claude-Code-only; other `trailai-mcp` clients
+  keep today's self-report-only behavior unchanged, with no regression
+  and no silent-attachment capture. (My call — the whole brainstorm that
+  produced this design was Claude-Code-specific; revisit if that
+  changes.)
+
+## Anti-goals
+
+- Shipping something that still only extends the self-report convention
+  (e.g. "add more optional params to `trail_log_step`") and calling the
+  silent-attachment problem solved. It isn't solved unless the capture
+  path is independent of the agent choosing to call anything.
+- Requiring the user to remember to opt in per session. Once configured
+  (project- or user-level hook config), it must apply automatically to
+  every run, local or background, the same way `trail_start_run` already
+  does today for self-report.
+- Adding latency to the agent's actual work loop. Hooks must be
+  fire-and-forget: write locally and return immediately; never block a
+  tool call on a network round-trip to Tether.
+
+## Design
+
+### 1. Hook-based silent-attachment capture (new)
+
+Ship a small hook script bundled with `trailai-mcp`, invoked by Claude
+Code's own hook contract (JSON payload on stdin), registered in
+`.claude/settings.json` (project- or user-level) for:
+
+- **`SessionStart`** — captures injected `additionalContext` verbatim
+  (this is the exact mechanism that fired in this project's own session
+  that led to this design: a `SessionStart` hook injected a full skill's
+  text before any agent action). This is the primary source for "silent"
+  attachments — skill auto-triggers, memory files, `CLAUDE.md`, whatever
+  the harness decided to inject.
+- **`PreToolUse`** — captures tool name + input JSON *before* execution,
+  deterministically, regardless of whether the agent later calls
+  `trail_log_step` for the same call. This becomes the non-agent-dependent
+  source for "files actively touched."
+- `PostToolUse` / `UserPromptSubmit` / `Stop` are candidates to evaluate
+  once real hook payloads are in hand — not committed to in this design
+  (see Open Questions).
+
+The hook script never makes a blocking network call on the critical path.
+It appends one JSONL record per event to a local, append-only log file,
+tagged with a run id and timestamp, and returns immediately. Separately,
+best-effort and non-blocking, it attempts to forward the same event live
+if a reachable `TRAIL_URL` is configured — this is what makes "live"
+fall out for free once reachability exists, with the local log as the
+durable source of truth regardless.
+
+### 2. Getting the local log to Tether
+
+A background sandbox may never have network access to Tether while
+running. Two delivery paths, not mutually exclusive:
+
+- **Live, best-effort**: if `TRAIL_URL` is reachable, the hook POSTs each
+  event as it happens (or a flush step at `trail_finish_run` uploads the
+  accumulated log as a batch). This is the "stream" case, and it's just
+  the existing OTLP pipe plus a new attribute namespace — no new
+  transport.
+- **Carried with the workspace, always available**: the local JSONL log
+  lives inside the session's working directory, so it travels with
+  whatever the background job already produces (a commit, a PR, a
+  worktree). This guarantees the data exists and is reviewable after the
+  fact even with zero network access during the run — the default this
+  design leans on for background/cloud sessions specifically.
+
+### 3. Data model: composition, distinct from coverage
+
+Add a new **composition** record per run, additive alongside the existing
+`coverage.ts` (which stays as-is — "did a known manifest entry get
+self-reported as used" is still a useful, narrower question):
+
+```
+AttachmentEntry {
+  source: "session_start_hook" | "pre_tool_use_hook" | "self_reported"
+  kind: "skill" | "memory_file" | "claude_md" | "tool_file" | "mcp_server"
+  nameOrPath: string
+  sizeBytes: number
+  contentPreview?: string     // sanitize()-truncated/redacted, see §4;
+                              // present when the source captured real
+                              // content (hook payloads), absent when it
+                              // only ever had a name/path (e.g. an MCP
+                              // server entry)
+  timestamp: string
+}
+```
+
+Composition is the broader lens: it includes things with no manifest
+entry at all (a memory file, a hook-injected blob) and things the agent
+never self-reported. Coverage keeps answering "was this known thing used
+according to the agent"; composition answers "what actually entered
+context and when, regardless of who reported it."
+
+`source: "self_reported"` entries are a read-time reshape of data Tether
+already has — today's `gen_ai.harness.source_type`/`source_name` step
+attributes and Phase 1's structured tool-call args — projected into the
+`AttachmentEntry` shape, the same way `coverage.ts` already reshapes
+existing step data rather than introducing a new write path. No new MCP
+tool and no `trailai-mcp` schema change for this lane. (My call — a new
+explicit self-report-an-attachment tool would duplicate data the agent
+already reports through existing fields.)
+
+UI: a new tab/section in the existing persistent shell (per the unified
+shell design already shipped) showing this per-run timeline — most
+likely its own panel rather than folded into Harness anatomy, since
+composition is temporal/per-run while Harness anatomy is a static
+inventory. Exact placement is left to the builder (§ Open Questions).
+
+Composition listing must not require a root span. `server/src/runs.ts`'s
+`getRun`/`listRuns` today only surface a run once `trail_finish_run` has
+emitted its root span (`parentSpanId IS NULL`) — but a `SessionStart`
+hook mints a run id before any agent action, and a background job can
+end (timeout, crash, or an agent that never calls any `trail_*` tool at
+all) without ever calling `trail_finish_run`. That's precisely the
+unattended-sandbox case this design exists for, so losing the composition
+record whenever a run doesn't cleanly finish would defeat the point.
+Composition entries must be listable/viewable by their hook-known run id
+directly, independent of whether a root span exists yet, with a
+synthetic/partial run row standing in until (or in place of) a real one.
+(My call — this follows directly from Goal 5; flagging it explicitly
+because it means `runs.ts`/the rail UI need a small accommodation beyond
+"add a new panel.")
+
+### 4. Redaction and size limits
+
+Hook payloads can be large and can contain file contents (a `SessionStart`
+`additionalContext` blob can be arbitrarily big — again, exactly what
+happened in this project's own session). Reuse the existing `sanitize()`
+conventions from Phase 1 (16KB per-string-leaf truncation, secret-pattern
+redaction) rather than inventing a second redaction mechanism for this new
+input path.
+
+### 5. Reachability / deployment (documented, not built)
+
+Three options, increasing effort, documented for the user to choose from:
+
+1. **After-the-fact, zero network dependency (default)** — the local log
+   ships with the workspace; the user reviews it via their local Tether
+   UI once it's reachable again. No new infrastructure required.
+2. **Self-hosted public instance** — `trailai-tether` run on a reachable
+   host (VPS, `ngrok`/`cloudflared` tunnel, etc.), `TRAIL_URL` set in the
+   background session's environment so the hook's best-effort POST
+   reaches it live.
+3. **Trail Cloud** — same mechanism, pointed at the hosted SaaS instead of
+   self-hosting. Only relevant if the user already wants a Trail Cloud
+   account; this project does not build or operate that service.
+
+## What's left to the builder
+
+- **Hook event list for v1**: `SessionStart` + `PreToolUse` cover the
+  cases discussed here. Evaluate `PostToolUse`/`UserPromptSubmit`/`Stop`
+  against real hook payloads before committing to them — don't assume.
+- **Run correlation**: `SessionStart` fires before any agent action, so
+  before any self-reported `trail_start_run`. The hook likely needs to
+  mint/own the run id itself, with `trail_start_run` adopting it if/when
+  the agent calls it — not the other way around. Design the id handoff
+  explicitly in the plan.
+- **Local log location/format**: append-only JSONL is the natural
+  default; confirm the exact path against Claude Code's hook `cwd`/env
+  contract (where a hook process actually runs, and what's guaranteed to
+  survive with the workspace).
+- **Ingestion shape**: confirm whether composition events reuse the
+  existing OTLP span/event pipe with a new attribute namespace
+  (`gen_ai.harness.attachment.*`) versus a dedicated endpoint — reusing
+  OTLP keeps one pipe and is the likely answer, but verify against
+  `otlp.ts`/`runs.ts` before committing.
+- **UI placement**: new tab in the shell vs. augmenting Harness anatomy —
+  lean toward a new tab (my call, stated here so it can be revisited), not
+  agreed upon with the user beyond this document.
