@@ -159,7 +159,7 @@ function formatDuration(startNs: string, endNs: string): string {
 	return Math.floor(seconds / 60) + "m " + String(seconds % 60).padStart(2, "0") + "s";
 }
 
-function parseRaw(raw: string): { attrs: AttrMap; events: { name: string; attributes: AttrMap }[]; errorCode: number } | null {
+export function parseRaw(raw: string): { attrs: AttrMap; events: { name: string; attributes: AttrMap }[]; errorCode: number } | null {
 	try {
 		const parsed = JSON.parse(raw) as {
 			attributes?: { key: string; value: Record<string, unknown> }[];
