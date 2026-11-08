@@ -14,10 +14,15 @@ import type { AttachmentEntry } from "./capture.js";
 export const COMPOSITION_LOG_FILENAME = "trail-composition.jsonl";
 export const COMPOSITION_OFFSET_FILENAME = "trail-composition.offset.json";
 
-interface OffsetFile {
+interface OffsetEntry {
 	transcriptPath: string;
 	byteOffset: number;
 }
+
+/** On-disk shape of the offset sidecar: one entry per session_id, so two
+ * sessions that happen to share a log directory (e.g. both fell back to the
+ * same `cwd`) never reset each other's offset. */
+type OffsetMap = Record<string, OffsetEntry>;
 
 /**
  * Prefers payload.scratchpad_dir, falls back to payload.cwd, then to
@@ -35,32 +40,47 @@ export function resolveLogDir(payload: { scratchpad_dir?: unknown; cwd?: unknown
 }
 
 /**
- * Reads <logDir>/<COMPOSITION_OFFSET_FILENAME>. Returns 0 if the file
- * doesn't exist, fails to parse, or its transcriptPath doesn't match the
- * one passed in -- a changed transcript path means start over, don't
- * miscount into the wrong file. Matches manifest.ts's convention of
- * catching readFileSync errors and falling back to a safe default rather
- * than throwing.
+ * Reads <logDir>/<COMPOSITION_OFFSET_FILENAME> and returns the whole map,
+ * or {} if the file doesn't exist or fails to parse as an object. Matches
+ * manifest.ts's convention of catching readFileSync errors and falling
+ * back to a safe default rather than throwing.
  */
-export function readOffset(logDir: string, transcriptPath: string): number {
+function readOffsetMap(logDir: string): OffsetMap {
 	try {
 		const content = readFileSync(join(logDir, COMPOSITION_OFFSET_FILENAME), "utf-8");
-		const parsed = JSON.parse(content) as OffsetFile;
-		if (parsed.transcriptPath !== transcriptPath) return 0;
-		return parsed.byteOffset;
+		const parsed = JSON.parse(content);
+		if (parsed === null || typeof parsed !== "object") return {};
+		return parsed as OffsetMap;
 	} catch {
-		return 0;
+		return {};
 	}
 }
 
 /**
- * Writes { transcriptPath, byteOffset } as JSON to
- * <logDir>/<COMPOSITION_OFFSET_FILENAME>, creating logDir first if needed.
+ * Returns the byte offset recorded for `sessionId`. Returns 0 if the
+ * sidecar file doesn't exist, fails to parse, has no entry for this
+ * session, or that entry's transcriptPath doesn't match the one passed in
+ * -- a changed transcript path means start over, don't miscount into the
+ * wrong file.
  */
-export function writeOffset(logDir: string, transcriptPath: string, byteOffset: number): void {
+export function readOffset(logDir: string, sessionId: string, transcriptPath: string): number {
+	const entry = readOffsetMap(logDir)[sessionId];
+	if (entry === undefined || entry.transcriptPath !== transcriptPath) return 0;
+	return entry.byteOffset;
+}
+
+/**
+ * Sets this session's entry to { transcriptPath, byteOffset } and writes
+ * the whole map back to <logDir>/<COMPOSITION_OFFSET_FILENAME>, creating
+ * logDir first if needed. Preserves every other session's entry already in
+ * the map -- a missing/corrupt file is treated as an empty map, never as
+ * license to clobber other sessions' entries.
+ */
+export function writeOffset(logDir: string, sessionId: string, transcriptPath: string, byteOffset: number): void {
 	mkdirSync(logDir, { recursive: true });
-	const offsetFile: OffsetFile = { transcriptPath, byteOffset };
-	writeFileSync(join(logDir, COMPOSITION_OFFSET_FILENAME), JSON.stringify(offsetFile));
+	const map = readOffsetMap(logDir);
+	map[sessionId] = { transcriptPath, byteOffset };
+	writeFileSync(join(logDir, COMPOSITION_OFFSET_FILENAME), JSON.stringify(map));
 }
 
 /**

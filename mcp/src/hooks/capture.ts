@@ -1,5 +1,5 @@
 /**
- * Turns raw Claude Code hook payloads (PreToolUse, UserPromptSubmit
+ * Turns raw Claude Code hook payloads (PreToolUse, UserPromptExpansion
  * expansions) and Task 1's transcript-scanned attachment records into the
  * normalized AttachmentEntry shape this feature reports on. Pure functions
  * only -- no I/O, no log persistence; later tasks own that.
@@ -15,6 +15,12 @@ export interface AttachmentEntry {
 	sizeBytes: number;
 	contentPreview?: string;
 	timestamp: string;
+	sessionId: string;
+}
+
+/** `payload.session_id` if it's a string, else "" -- matches this module's existing defensive style. */
+function sessionIdFrom(payload: Record<string, unknown>): string {
+	return typeof payload.session_id === "string" ? payload.session_id : "";
 }
 
 const FILE_TOOL_NAMES = new Set(["Read", "Write", "Edit"]);
@@ -27,7 +33,7 @@ const FILE_TOOL_NAMES = new Set(["Read", "Write", "Edit"]);
 function skillNameFrom(toolInput: Record<string, unknown>): string {
 	if (typeof toolInput.name === "string") return toolInput.name;
 	if (typeof toolInput.skill === "string") return toolInput.skill;
-	return JSON.stringify(toolInput);
+	return sanitize(JSON.stringify(toolInput)) as string;
 }
 
 function mcpServerNameFrom(toolName: string, payload: Record<string, unknown>): string {
@@ -48,6 +54,7 @@ export function fromPreToolUse(payload: Record<string, unknown>): AttachmentEntr
 		? payload.tool_input
 		: {}) as Record<string, unknown>;
 	const timestamp = new Date().toISOString();
+	const sessionId = sessionIdFrom(payload);
 
 	if (FILE_TOOL_NAMES.has(toolName)) {
 		const filePath = toolInput.file_path;
@@ -58,6 +65,7 @@ export function fromPreToolUse(payload: Record<string, unknown>): AttachmentEntr
 			nameOrPath: filePath,
 			sizeBytes: Buffer.byteLength(filePath, "utf8"),
 			timestamp,
+			sessionId,
 		}];
 	}
 
@@ -68,6 +76,7 @@ export function fromPreToolUse(payload: Record<string, unknown>): AttachmentEntr
 			nameOrPath: skillNameFrom(toolInput),
 			sizeBytes: 0,
 			timestamp,
+			sessionId,
 		}];
 	}
 
@@ -78,6 +87,7 @@ export function fromPreToolUse(payload: Record<string, unknown>): AttachmentEntr
 			nameOrPath: mcpServerNameFrom(toolName, payload),
 			sizeBytes: 0,
 			timestamp,
+			sessionId,
 		}];
 	}
 
@@ -95,6 +105,7 @@ export function fromUserPromptExpansion(payload: Record<string, unknown>): Attac
 		nameOrPath: commandName,
 		sizeBytes: 0,
 		timestamp: new Date().toISOString(),
+		sessionId: sessionIdFrom(payload),
 	};
 
 	if (payload.command_args !== undefined) {
@@ -134,7 +145,13 @@ function extractInjectedContext(stdout: string): string {
 	return stdout;
 }
 
-export function fromTranscriptAttachment(att: TranscriptAttachment): AttachmentEntry {
+/**
+ * sessionId is supplied by the caller rather than read off `att` -- a
+ * transcript record has no session id of its own (the whole transcript
+ * file belongs to a single session), so run.ts passes the session id it
+ * already extracted from the hook payload.
+ */
+export function fromTranscriptAttachment(att: TranscriptAttachment, sessionId: string): AttachmentEntry {
 	const extracted = extractInjectedContext(att.stdout);
 	return {
 		source: "transcript_hook_attachment",
@@ -143,5 +160,6 @@ export function fromTranscriptAttachment(att: TranscriptAttachment): AttachmentE
 		sizeBytes: Buffer.byteLength(extracted, "utf8"),
 		contentPreview: sanitize(extracted) as string,
 		timestamp: att.timestamp,
+		sessionId,
 	};
 }

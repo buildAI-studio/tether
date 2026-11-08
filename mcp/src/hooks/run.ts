@@ -28,6 +28,8 @@ export async function runHook(eventArg: string, stdinText: string): Promise<void
 			return; // malformed stdin -- nothing to do
 		}
 
+		const sessionId = typeof payload.session_id === "string" ? payload.session_id : "";
+
 		let directEntries: AttachmentEntry[] = [];
 		if (eventArg === "pre-tool-use") {
 			directEntries = fromPreToolUse(payload);
@@ -39,19 +41,27 @@ export async function runHook(eventArg: string, stdinText: string): Promise<void
 		const transcriptPath = payload.transcript_path;
 		let transcriptEntries: AttachmentEntry[] = [];
 		let logDir: string | undefined;
+		let newOffset: number | undefined;
 		if (typeof transcriptPath === "string") {
 			logDir = resolveLogDir(payload);
-			const offset = readOffset(logDir, transcriptPath);
+			const offset = readOffset(logDir, sessionId, transcriptPath);
 			const scanResult = scanTranscriptForAttachments(transcriptPath, offset);
-			transcriptEntries = scanResult.attachments.map(fromTranscriptAttachment);
-			writeOffset(logDir, transcriptPath, scanResult.newOffset);
+			transcriptEntries = scanResult.attachments.map((att) => fromTranscriptAttachment(att, sessionId));
+			newOffset = scanResult.newOffset;
 		}
 
 		const entries = [...directEntries, ...transcriptEntries];
-		if (entries.length === 0) return;
-
 		logDir ??= resolveLogDir(payload);
-		appendEntries(logDir, entries);
+		appendEntries(logDir, entries); // no-op when entries is empty
+
+		// Persist the new offset only after the entries it unlocks are safely
+		// on disk -- otherwise a failure in appendEntries would lose those
+		// transcript-derived entries for good (the offset would already have
+		// moved past them). Writing the offset after a failed append instead
+		// just re-reads the same transcript lines next time, which is safe.
+		if (typeof transcriptPath === "string" && newOffset !== undefined) {
+			writeOffset(logDir, sessionId, transcriptPath, newOffset);
+		}
 	} catch {
 		// never throw -- a hook crash or bad stdout would corrupt Claude Code's
 		// own hook-driven permission/context flow.

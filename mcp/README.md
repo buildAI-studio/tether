@@ -108,10 +108,13 @@ It records two things into a local log for each session:
 - **Skills, slash-command expansions, and files/MCP servers touched by tool
   calls.** Recorded from the `PreToolUse` and `UserPromptExpansion` hook
   payloads.
-- **Content a hook silently injected into context.** Any text a hook returns
-  as `additionalContext` (or equivalent) is read back from the session
-  transcript, whether that hook is yours or a third party's, and whether or
-  not the agent ever mentions it.
+- **Content a `SessionStart` hook silently injected into context.** Text a
+  `SessionStart` hook returns as `additionalContext` is read back from the
+  session transcript's `hook_success` records, whether that hook is yours or
+  a third party's, and whether or not the agent ever mentions it. Context
+  injected by other hook events (e.g. `PostToolUse`) is recorded under a
+  differently-shaped transcript record this version doesn't parse yet --
+  that's a known gap, not yet captured.
 
 Why hooks rather than the MCP tools: the agent self-reporting what it loaded
 is unreliable, and background or cloud sessions can't be watched live. Hooks
@@ -163,7 +166,9 @@ The event argument must be one of `session-start`, `pre-tool-use`,
 `user-prompt-expansion`, or `stop`. Each hook reads its payload from stdin. Every event also
 scans the session transcript for hook-injected context recorded since the last
 call, so the order of events doesn't matter. Narrow the `PreToolUse` `matcher` (for example to `Read|Edit|Write|Skill`)
-if you want to skip the process launch on tools you don't need to track.
+if you want to skip the process launch on tools you don't need to track --
+that example drops MCP tool calls, so add `mcp__.*` to the pattern (e.g.
+`Read|Edit|Write|Skill|mcp__.*`) if you also want those tracked.
 
 ### Where the output lands
 
