@@ -167,6 +167,52 @@ Code's own hook contract (JSON payload on stdin), registered in
   brainstormed goals needs them yet — left out of v1 deliberately rather
   than by omission.
 
+**Second finding, bigger than the first, verified directly against this
+project's own running session (no nested process needed — this session's
+own transcript file was readable locally):** a hook cannot see what a
+*different* hook injected via its own stdin fields — `SessionStart`'s
+payload tells you `source`/`model`/`session_id`, never another hook's
+`additionalContext`. That looked like it broke the core premise (the
+motivating example was literally "a `SessionStart` hook injected a whole
+skill's text, and nothing we register could see that"). It doesn't,
+because of `transcript_path`: Claude Code logs **every** hook invocation,
+from any source, as a `{"type":"attachment","attachment":{"type":
+"hook_success",...}}` record in that session's transcript JSONL —
+verified by reading this session's own transcript file directly and
+finding the superpowers plugin's `SessionStart` hook's exact injected
+text, verbatim, inside `attachment.stdout`, alongside `hookName`
+(`"SessionStart:startup"`), `hookEvent`, `command`, `exitCode`,
+`durationMs`. This is generic hook-execution logging, not something
+`SessionStart` does specially — it is how we get visibility into hooks
+we didn't write and can't otherwise observe.
+
+This changes the mechanism from "three hooks that each report their own
+narrow stdin fields" to: **register `SessionStart` + `PreToolUse` (+
+`Stop`, as a final-flush safety net for a session that starts and ends
+without ever calling a tool) purely as triggers**, and on each firing,
+read `transcript_path`, scan forward from the last offset we've
+processed for this session (tracked in a small sidecar file next to our
+own log, keyed by `session_id`) for new `type:"attachment"` entries —
+*any* `hookEvent`, *any* `hookName`, ours or a third party's — and
+convert each into an `AttachmentEntry`. `tool_name`/`tool_input` for
+"files actively touched" still comes from `PreToolUse`'s own documented
+stdin directly (reliable, documented, no transcript dependency needed
+for that half) — transcript parsing is scoped narrowly to the one thing
+with no other access path: other hooks' injected content. `transcript_path`
+is "written asynchronously, may lag the in-memory conversation" per the
+docs, so this is near-real-time, not instantaneous — fine for the
+after-the-fact case this design is built around, and it's the local log
+that's authoritative regardless of timing.
+
+Trade-off worth stating plainly: the hooks contract (`tool_name`,
+`tool_input`, `source`, etc.) is Anthropic's documented, presumably
+more stable surface; the transcript's internal JSONL shape
+(`attachment.type`, `attachment.hookEvent`, …) is not a published,
+versioned contract. Parse it defensively — a line that doesn't match the
+expected shape is skipped, never thrown — so a format change in a future
+Claude Code version degrades to "composition capture quietly stops
+adding new entries" rather than breaking the agent's own tool-call loop.
+
 **Hard constraint found during the spike, not obvious beforehand:**
 `PreToolUse`'s JSON output can set `permissionDecision`
 (`allow|deny|ask|defer`) and `PostToolUse`'s can rewrite what Claude
@@ -209,8 +255,17 @@ self-reported as used" is still a useful, narrower question):
 
 ```
 AttachmentEntry {
-  source: "session_start_hook" | "pre_tool_use_hook" | "self_reported"
+  source: "pre_tool_use_hook" | "user_prompt_expansion_hook"
+        | "transcript_hook_attachment" | "self_reported"
+  // "transcript_hook_attachment": recovered by scanning transcript_path
+  // for a *different* hook's recorded invocation (§1) — this is the
+  // lane that actually answers "what got silently attached." The other
+  // three are each a hook reporting its own directly-observed event.
   kind: "skill" | "memory_file" | "claude_md" | "tool_file" | "mcp_server"
+      | "hook_injected_context"  // transcript_hook_attachment entries
+                                 // whose content doesn't cleanly map to
+                                 // a manifest category — still surfaced,
+                                 // not dropped, with hookName as context
   nameOrPath: string
   sizeBytes: number
   contentPreview?: string     // sanitize()-truncated/redacted, see §4;
