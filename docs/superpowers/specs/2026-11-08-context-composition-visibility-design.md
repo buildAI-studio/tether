@@ -123,31 +123,66 @@ without depending on the agent's cooperation to report it.
 
 ### 1. Hook-based silent-attachment capture (new)
 
+**Verified against Claude Code's own hooks reference (not just inferred)**
+— spiked 2026-11-09 by fetching the docs directly, since a live-capture
+spike (run a scoped nested session and inspect its real stdin payloads)
+was blocked by this project's own worktree-isolation sandboxing, which
+refuses to spawn nested `claude` subprocesses it can't verify won't touch
+git. Treat the facts below as doc-verified, not yet confirmed against a
+live payload — still worth a quick empirical check in a normal (non-
+worktree-isolated) environment before locking the format in the plan.
+
 Ship a small hook script bundled with `trailai-mcp`, invoked by Claude
 Code's own hook contract (JSON payload on stdin), registered in
-`.claude/settings.json` (project- or user-level) for:
+`.claude/settings.json` (project- or user-level) for three events:
 
 - **`SessionStart`** — captures injected `additionalContext` verbatim
   (this is the exact mechanism that fired in this project's own session
   that led to this design: a `SessionStart` hook injected a full skill's
-  text before any agent action). This is the primary source for "silent"
-  attachments — skill auto-triggers, memory files, `CLAUDE.md`, whatever
-  the harness decided to inject.
+  text before any agent action). Stdin carries `source`
+  (`startup|resume|clear|compact|fork`), `model`, and the common fields
+  below. This is the primary source for "silent" attachments — skill
+  auto-triggers, memory files, `CLAUDE.md`, whatever the harness decided
+  to inject.
 - **`PreToolUse`** — captures tool name + input JSON *before* execution,
   deterministically, regardless of whether the agent later calls
-  `trail_log_step` for the same call. This becomes the non-agent-dependent
-  source for "files actively touched."
-- `PostToolUse` / `UserPromptSubmit` / `Stop` are candidates to evaluate
-  once real hook payloads are in hand — not committed to in this design
-  (see Open Questions).
+  `trail_log_step` for the same call. `tool_name` is a literal
+  (`"Bash"`, `"Read"`, `"Edit"`, `"Write"`, `"Agent"`, `mcp__<server>__
+  <tool>`, …) and `tool_input` is the tool's own argument schema — for
+  Read/Write/Edit, `tool_input.file_path` is already normalized to an
+  absolute path before the hook runs, which is exactly the "files
+  actively touched" data this design wants, with no self-report needed.
+  A skill the agent auto-triggers (not typed as `/name`) fires this hook
+  with the Skill tool as the match target — doc-confirmed as a valid
+  matcher, not yet confirmed as the literal `tool_name` string (flag for
+  the empirical check).
+- **`UserPromptExpansion`** — not in the original four candidates, found
+  during the spike. This is the event that actually fires for a *typed*
+  `/skillname` slash-command invocation, which bypasses `PreToolUse`
+  entirely. Without this event, v1 would silently miss every
+  explicitly-invoked skill and only catch auto-triggered ones — added to
+  the v1 hook list for that reason, not left as a "maybe later."
+- `PostToolUse` / `PostToolUseFailure` / `PermissionRequest` /
+  `PermissionDenied` exist and are documented, but nothing in the
+  brainstormed goals needs them yet — left out of v1 deliberately rather
+  than by omission.
+
+**Hard constraint found during the spike, not obvious beforehand:**
+`PreToolUse`'s JSON output can set `permissionDecision`
+(`allow|deny|ask|defer`) and `PostToolUse`'s can rewrite what Claude
+sees (`updatedToolOutput`). Our logger hook must never emit any JSON (or
+any stdout at all, since plain stdout on some events is itself read as
+additional context) — it logs as a pure side effect and exits 0 with
+nothing on stdout. Getting this wrong doesn't just pollute data, it can
+silently alter the agent's permission flow or its tool-call context.
 
 The hook script never makes a blocking network call on the critical path.
 It appends one JSONL record per event to a local, append-only log file,
-tagged with a run id and timestamp, and returns immediately. Separately,
-best-effort and non-blocking, it attempts to forward the same event live
-if a reachable `TRAIL_URL` is configured — this is what makes "live"
-fall out for free once reachability exists, with the local log as the
-durable source of truth regardless.
+tagged with the session id and timestamp, and returns immediately.
+Separately, best-effort and non-blocking, it attempts to forward the
+same event live if a reachable `TRAIL_URL` is configured — this is what
+makes "live" fall out for free once reachability exists, with the local
+log as the durable source of truth regardless.
 
 ### 2. Getting the local log to Tether
 
@@ -262,18 +297,30 @@ in increasing effort:
 
 ## What's left to the builder
 
-- **Hook event list for v1**: `SessionStart` + `PreToolUse` cover the
-  cases discussed here. Evaluate `PostToolUse`/`UserPromptSubmit`/`Stop`
-  against real hook payloads before committing to them — don't assume.
-- **Run correlation**: `SessionStart` fires before any agent action, so
-  before any self-reported `trail_start_run`. The hook likely needs to
-  mint/own the run id itself, with `trail_start_run` adopting it if/when
-  the agent calls it — not the other way around. Design the id handoff
-  explicitly in the plan.
-- **Local log location/format**: append-only JSONL is the natural
-  default; confirm the exact path against Claude Code's hook `cwd`/env
-  contract (where a hook process actually runs, and what's guaranteed to
-  survive with the workspace).
+Resolved by the 2026-11-09 documentation spike (§1 has the detail):
+
+- **Hook event list for v1**: `SessionStart` + `PreToolUse` +
+  `UserPromptExpansion` — settled, with a reason for each inclusion and
+  each omission, not a placeholder to revisit.
+- **Run correlation**: no custom id-minting needed. `session_id` is a
+  common field on every hook event (`SessionStart`, `PreToolUse`,
+  `UserPromptExpansion` all carry it) — use it directly as the
+  correlation key between hook-captured composition data and
+  self-reported run data, rather than inventing a handoff scheme.
+- **Local log location**: use the `scratchpad_dir` field Claude Code
+  already provides in hook stdin (session-scoped scratch path, v2.1.257+)
+  as the primary location; fall back to `cwd` on older versions where
+  it's absent.
+
+Still open, genuinely undecided:
+
+- **Empirical confirmation**: the spike above is doc-verified, not
+  live-captured (worktree-isolation blocked spawning a nested session to
+  inspect real payloads — not a restriction that applies outside this
+  background job's sandbox). Before locking the wire format in the plan,
+  actually run a scoped hook logger once in a normal environment and
+  diff its output against the documented shapes above, especially
+  whether `tool_name` is literally `"Skill"` for an auto-triggered skill.
 - **Ingestion shape**: confirm whether composition events reuse the
   existing OTLP span/event pipe with a new attribute namespace
   (`gen_ai.harness.attachment.*`) versus a dedicated endpoint — reusing
