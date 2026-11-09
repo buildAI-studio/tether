@@ -92,8 +92,15 @@ interface CandidateRow {
  * A crashed *self-reported* run (real step data under gen_ai.harness.source_type, also
  * rootless) is excluded too: it has no attachment attributes, so getCompositionView returns
  * `{ entries: [] }` for it and this function skips it below.
+ *
+ * `linkedSessionIds` additionally excludes sessions that already have a linked run (see
+ * runs.ts's listLinkedSessionIds) -- a session whose own traceId never got a root span can
+ * still be the one a *different* trace's root span links to via its
+ * gen_ai.harness.session_id attribute, and once that link exists this view's whole point
+ * (surfacing composition data with nowhere else to be seen) no longer applies to it: the
+ * linked run's own detail page already shows it.
  */
-export function listCompositionOnlySessions(db: Database.Database, limit: number): CompositionSessionSummary[] {
+export function listCompositionOnlySessions(db: Database.Database, limit: number, linkedSessionIds: Set<string>): CompositionSessionSummary[] {
 	const candidates = db
 		.prepare(
 			"SELECT traceId, MAX(startTimeUnixNano) as lastNs FROM spans WHERE traceId NOT IN (SELECT traceId FROM spans WHERE parentSpanId IS NULL) GROUP BY traceId ORDER BY lastNs DESC LIMIT ?",
@@ -106,13 +113,41 @@ export function listCompositionOnlySessions(db: Database.Database, limit: number
 		if (!view || view.entries.length === 0) continue; // no attachment data -- a crashed self-reported run, or no data at all
 
 		const lastNs = toNs(row.lastNs);
-		summaries.push({
+		const summary: CompositionSessionSummary = {
 			traceId: row.traceId,
 			sessionId: view.entries[0].sessionId,
 			entryCount: view.entries.length,
 			lastActivityAt: lastNs !== null ? toIsoOrEmpty(lastNs) : "",
-		});
+		};
+		if (linkedSessionIds.has(summary.sessionId)) continue; // already linked to a run -- visible there instead
+		summaries.push(summary);
 	}
 
 	return summaries;
+}
+
+/**
+ * Derives the traceId a session id's composition spans were filed under (mirrors
+ * mcp/src/hooks/deliver.ts's function of the same name: strip every non-hex character,
+ * lowercase, keep it only if exactly 32 hex characters -- a session UUID's 32 hex digits with
+ * dashes stripped). Unlike the mcp/ version, this never falls back to a random id: that
+ * version mints a trace for a session with no usable id, while this one only ever looks an
+ * existing trace up, so a malformed/empty sessionId has nothing to look up and must return
+ * null rather than a random, guaranteed-to-miss value.
+ */
+export function traceIdFromSessionId(sessionId: string): string | null {
+	const stripped = sessionId.replace(/[^0-9a-fA-F]/g, "").toLowerCase();
+	return stripped.length === 32 ? stripped : null;
+}
+
+/**
+ * Looks up a trace's composition view by the harness session id instead of the traceId
+ * directly -- the two live in different id spaces (see this file's header comment), and
+ * callers that only have a session id (e.g. a run's linked session) need this instead of
+ * getCompositionView.
+ */
+export function getCompositionViewForSessionId(db: Database.Database, sessionId: string): CompositionView | null {
+	const traceId = traceIdFromSessionId(sessionId);
+	if (traceId === null) return null;
+	return getCompositionView(db, traceId);
 }

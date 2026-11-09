@@ -2,7 +2,7 @@ import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import { openDatabase, insertSpan } from "../dist/db.js";
 import { listRuns } from "../dist/runs.js";
-import { getCompositionView, listCompositionOnlySessions } from "../dist/composition.js";
+import { getCompositionView, listCompositionOnlySessions, traceIdFromSessionId, getCompositionViewForSessionId } from "../dist/composition.js";
 import { renderCompositionFragment } from "../dist/templates/composition-detail.js";
 
 function attachmentSpan(traceId, spanId, parentSpanId, overrides = {}) {
@@ -78,7 +78,7 @@ describe("listCompositionOnlySessions", () => {
 	test("lists a composition-only trace, not a run", () => {
 		const db = openDatabase(":memory:");
 		insertSpan(db, attachmentSpan("t1", "s1", "parent-placeholder", { "gen_ai.harness.attachment.session_id": "sess-abc" }));
-		const sessions = listCompositionOnlySessions(db, 50);
+		const sessions = listCompositionOnlySessions(db, 50, new Set());
 		assert.equal(sessions.length, 1);
 		assert.equal(sessions[0].traceId, "t1");
 		assert.equal(sessions[0].sessionId, "sess-abc");
@@ -91,7 +91,7 @@ describe("listCompositionOnlySessions", () => {
 			startTimeUnixNano: "1700000000000000000", endTimeUnixNano: "1700000000000000000",
 			raw: JSON.stringify({ attributes: [], status: { code: 1 } }) });
 		insertSpan(db, attachmentSpan("run1", "s1", "root")); // same traceId as the run, hypothetically
-		const sessions = listCompositionOnlySessions(db, 50);
+		const sessions = listCompositionOnlySessions(db, 50, new Set());
 		assert.equal(sessions.length, 0);
 	});
 
@@ -100,7 +100,7 @@ describe("listCompositionOnlySessions", () => {
 		insertSpan(db, { traceId: "t2", spanId: "s1", parentSpanId: "some-nonexistent-root",
 			startTimeUnixNano: "1700000000000000000", endTimeUnixNano: "1700000000000000000", name: "step",
 			raw: JSON.stringify({ attributes: [{ key: "gen_ai.harness.source_type", value: { stringValue: "skill" } }], status: { code: 1 } }) });
-		const sessions = listCompositionOnlySessions(db, 50);
+		const sessions = listCompositionOnlySessions(db, 50, new Set());
 		assert.equal(sessions.length, 0);
 	});
 
@@ -108,7 +108,7 @@ describe("listCompositionOnlySessions", () => {
 		const db = openDatabase(":memory:");
 		insertSpan(db, { ...attachmentSpan("old", "s1", "p1"), startTimeUnixNano: "1600000000000000000" });
 		insertSpan(db, { ...attachmentSpan("new", "s1", "p1"), startTimeUnixNano: "1700000000000000000" });
-		const sessions = listCompositionOnlySessions(db, 50);
+		const sessions = listCompositionOnlySessions(db, 50, new Set());
 		assert.deepEqual(sessions.map((s) => s.traceId), ["new", "old"]);
 	});
 
@@ -117,9 +117,48 @@ describe("listCompositionOnlySessions", () => {
 		const span = attachmentSpan("t6", "s1", "parent-placeholder");
 		span.startTimeUnixNano = "not-a-number";
 		insertSpan(db, span);
-		const sessions = listCompositionOnlySessions(db, 50);
+		const sessions = listCompositionOnlySessions(db, 50, new Set());
 		assert.equal(sessions.length, 1);
 		assert.equal(sessions[0].lastActivityAt, "");
+	});
+});
+
+describe("traceIdFromSessionId (server-side)", () => {
+	test("derives the same 32-hex traceId a UUID session id would produce", () => {
+		assert.equal(traceIdFromSessionId("0f962b5d-b5f1-42e0-a294-03819bc6eb8d"), "0f962b5db5f142e0a29403819bc6eb8d");
+	});
+	test("returns null for an empty or malformed session id", () => {
+		assert.equal(traceIdFromSessionId(""), null);
+		assert.equal(traceIdFromSessionId("not-a-uuid"), null);
+	});
+});
+
+describe("getCompositionViewForSessionId", () => {
+	test("finds composition data by session id", () => {
+		const db = openDatabase(":memory:");
+		const traceId = "0f962b5db5f142e0a29403819bc6eb8d";
+		insertSpan(db, attachmentSpan(traceId, "s1", "parent-placeholder", { "gen_ai.harness.attachment.session_id": "0f962b5d-b5f1-42e0-a294-03819bc6eb8d" }));
+		const view = getCompositionViewForSessionId(db, "0f962b5d-b5f1-42e0-a294-03819bc6eb8d");
+		assert.equal(view.entries.length, 1);
+	});
+	test("returns null for a malformed session id", () => {
+		const db = openDatabase(":memory:");
+		assert.equal(getCompositionViewForSessionId(db, "not-a-uuid"), null);
+	});
+});
+
+describe("listCompositionOnlySessions excludes linked sessions", () => {
+	test("a session id present in linkedSessionIds is excluded", () => {
+		const db = openDatabase(":memory:");
+		insertSpan(db, attachmentSpan("t1", "s1", "parent-placeholder", { "gen_ai.harness.attachment.session_id": "sess-linked" }));
+		const linked = new Set(["sess-linked"]);
+		assert.equal(listCompositionOnlySessions(db, 50, linked).length, 0);
+	});
+	test("a session id not in linkedSessionIds is still included", () => {
+		const db = openDatabase(":memory:");
+		insertSpan(db, attachmentSpan("t2", "s1", "parent-placeholder", { "gen_ai.harness.attachment.session_id": "sess-orphan" }));
+		const linked = new Set(["sess-linked"]);
+		assert.equal(listCompositionOnlySessions(db, 50, linked).length, 1);
 	});
 });
 
