@@ -10,9 +10,9 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import type Database from "better-sqlite3";
 import { insertSpan } from "./db.js";
-import { getRun, listRuns } from "./runs.js";
+import { getRun, listRuns, listLinkedSessionIds } from "./runs.js";
 import { getHarnessView } from "./harness.js";
-import { getCompositionView, listCompositionOnlySessions } from "./composition.js";
+import { getCompositionView, listCompositionOnlySessions, getCompositionViewForSessionId } from "./composition.js";
 import { getCoverage } from "./coverage.js";
 import { getUsage } from "./analytics.js";
 import { renderDetailFragment, renderEmptyDetailPanel } from "./templates/flight-recorder.js";
@@ -115,7 +115,7 @@ function decodeTraceIdOrShellError(
  * today's behavior exactly for that case. */
 function renderDetailOrComposition(db: Database.Database, traceId: string): { status: 200 | 404; body: string } {
 	const run = getRun(db, traceId);
-	if (run) return { status: 200, body: renderDetailFragment(run, getCoverage(db, traceId)) };
+	if (run) return { status: 200, body: renderDetailFragment(run, getCoverage(db, traceId), run.sessionId ? getCompositionViewForSessionId(db, run.sessionId) : null) };
 	const composition = getCompositionView(db, traceId);
 	if (composition && composition.entries.length > 0) return { status: 200, body: renderCompositionFragment(traceId, composition) };
 	return { status: 404, body: renderNotFoundPanel() };
@@ -128,7 +128,8 @@ function renderDetailOrComposition(db: Database.Database, traceId: string): { st
  * either summary type sorts to the end of this descending sort rather than crashing. */
 function buildRail(db: Database.Database, active: string | undefined): string {
 	const runEntries: RailEntry[] = listRuns(db, 50).map((run) => ({ kind: "run", run }));
-	const compositionEntries: RailEntry[] = listCompositionOnlySessions(db, 50).map((session) => ({ kind: "composition", session }));
+	const linkedSessionIds = listLinkedSessionIds(db);
+	const compositionEntries: RailEntry[] = listCompositionOnlySessions(db, 50, linkedSessionIds).map((session) => ({ kind: "composition", session }));
 	const merged = [...runEntries, ...compositionEntries]
 		.sort((a, b) => {
 			const aTime = a.kind === "run" ? a.run.startedAt : a.session.lastActivityAt;
@@ -640,7 +641,7 @@ export function createTetherServer(db: Database.Database, options: { pluginsRoot
 						state,
 						`Tether — ${run.goal}`,
 						rail,
-						renderDetailFragment(run, getCoverage(db, traceId)),
+						renderDetailFragment(run, getCoverage(db, traceId), run.sessionId ? getCompositionViewForSessionId(db, run.sessionId) : null),
 						pluginsBySlot(pluginsRoot)
 					);
 					res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });

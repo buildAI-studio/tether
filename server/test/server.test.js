@@ -71,6 +71,37 @@ function otlpPayload() {
 	};
 }
 
+/** Same shape as otlpPayload(), but with a caller-supplied traceId/spanId/attributes -- used to
+ * post a run (root span, no parentSpanId) carrying a `gen_ai.harness.session_id` attribute, which
+ * otlpPayload() itself has no way to express. */
+function runPayload(traceId, spanId, attributes = []) {
+	return {
+		resourceSpans: [
+			{
+				resource: { attributes: [{ key: "service.name", value: { stringValue: "test" } }] },
+				scopeSpans: [
+					{
+						scope: { name: "test-scope", version: "0.1.0" },
+						spans: [
+							{
+								traceId,
+								spanId,
+								name: "test-span",
+								kind: 1,
+								startTimeUnixNano: "1000000000",
+								endTimeUnixNano: "2000000000",
+								attributes,
+								events: [],
+								status: { code: 1 },
+							},
+						],
+					},
+				],
+			},
+		],
+	};
+}
+
 describe("POST /traces", () => {
 	test("ingests a valid OTLP payload and increments the trace count", async () => {
 		await withServer(async ({ db, port }) => {
@@ -533,6 +564,36 @@ describe("GET /fragments/rail", () => {
 			assert.match(body, /rail-row-composition/);
 		});
 	});
+
+	test("excludes a composition-only row once its session gets a linked run", async () => {
+		await withServer(async ({ port }) => {
+			const sessionId = "0f962b5d-b5f1-42e0-a294-03819bc6eb8d";
+			const compositionTraceId = "0f962b5db5f142e0a29403819bc6eb8d"; // traceIdFromSessionId(sessionId)
+			const runTraceId = "a".repeat(32);
+
+			await fetch(`http://127.0.0.1:${port}/traces`, {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify(compositionAttachmentPayload(compositionTraceId, { sessionId })),
+			});
+
+			const beforeBody = await (await fetch(`http://127.0.0.1:${port}/fragments/rail`)).text();
+			assert.equal(beforeBody.split(compositionTraceId).length - 1, 2);
+			assert.match(beforeBody, /rail-row-composition/);
+
+			await fetch(`http://127.0.0.1:${port}/traces`, {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify(
+					runPayload(runTraceId, "b".repeat(16), [{ key: "gen_ai.harness.session_id", value: { stringValue: sessionId } }])
+				),
+			});
+
+			const afterBody = await (await fetch(`http://127.0.0.1:${port}/fragments/rail`)).text();
+			assert.equal(afterBody.split(compositionTraceId).length - 1, 0, "composition-only row should be gone now that its session is linked");
+			assert.equal(afterBody.split(runTraceId).length - 1, 2, "the run's own row should still be present");
+		});
+	});
 });
 
 describe("GET /fragments/analytics", () => {
@@ -615,6 +676,34 @@ describe("GET /fragments/detail/:traceId", () => {
 			const res = await fetch(`http://127.0.0.1:${port}/fragments/detail/${traceId}`);
 			assert.equal(res.status, 404);
 			assert.doesNotMatch(await res.text(), /class="shell"/);
+		});
+	});
+
+	test("includes the run's own composition data when its session is linked", async () => {
+		await withServer(async ({ port }) => {
+			const sessionId = "0f962b5d-b5f1-42e0-a294-03819bc6eb8d";
+			const compositionTraceId = "0f962b5db5f142e0a29403819bc6eb8d"; // traceIdFromSessionId(sessionId)
+			const runTraceId = "a".repeat(32);
+
+			await fetch(`http://127.0.0.1:${port}/traces`, {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify(
+					runPayload(runTraceId, "b".repeat(16), [{ key: "gen_ai.harness.session_id", value: { stringValue: sessionId } }])
+				),
+			});
+			await fetch(`http://127.0.0.1:${port}/traces`, {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify(compositionAttachmentPayload(compositionTraceId, { sessionId })),
+			});
+
+			const res = await fetch(`http://127.0.0.1:${port}/fragments/detail/${runTraceId}`);
+			assert.equal(res.status, 200);
+			const text = await res.text();
+			const json = JSON.parse(text.match(/<script[^>]*id="run-data"[^>]*>([^<]*)<\/script>/)[1]);
+			assert.equal(json.composition.entries.length, 1);
+			assert.equal(json.composition.entries[0].nameOrPath, "/a/b.ts");
 		});
 	});
 });
