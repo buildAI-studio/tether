@@ -32,7 +32,13 @@ claude mcp add trail -- npx -y trailai-mcp
 - A single-page shell: a left rail lists the 50 most recent runs (goal,
   verdict, relative time, live-updated every 5s) and stays on screen while
   the main panel swaps between three views, navigated client-side with no
-  full page reload:
+  full page reload. The rail also surfaces composition-only sessions — a
+  crashed or still-running Claude Code session that attached skills/files/MCP
+  servers via the `trailai-mcp` hooks but never completed a run — marked with
+  a "NO RUN" badge and the session id instead of a goal. Clicking one opens
+  the same `/runs/:traceId` URL as a normal run, rendering a minimal
+  "Attached" list of what it picked up rather than the full Flight Recorder
+  view (which needs a completed run's root span):
   - **Detail** (`/runs/:traceId`, or `/` for the most recent run) — the
     Flight Recorder view: goal, verdict, a scrubbable step timeline with
     play/pause/speed controls, per-step expansion showing raw
