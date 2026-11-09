@@ -90,6 +90,8 @@ const STYLE = `
 	.rail-goal { font-size: 13px; font-weight: 560; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 	.rail-time { font-family: var(--mono); font-size: 10.5px; color: var(--ink-3); padding-left: 14px; }
 	.rail-empty { color: var(--ink-3); font-size: 13px; padding: 10px; }
+	.rail-row-composition .rail-goal { color: var(--ink-3); font-style: italic; }
+	.rail-badge-composition { display: inline-flex; align-items: center; flex: none; font-family: var(--mono); font-size: 9px; font-weight: 700; letter-spacing: 0.02em; text-transform: uppercase; color: var(--ink-3); background: var(--panel-2); border: 1px solid var(--line); border-radius: 4px; padding: 1px 5px; }
 
 	.main-wrap { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 	.tabbar { display: flex; align-items: center; gap: 10px; padding: 12px 20px; border-bottom: 1px solid var(--line); }

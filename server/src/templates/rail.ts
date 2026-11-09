@@ -1,4 +1,5 @@
 import type { RunSummary } from "../runs.js";
+import type { CompositionSessionSummary } from "../composition.js";
 
 // Object.assign(Object.create(null), ...) rather than a plain object literal: `run.verdict` is
 // attacker-controlled (arrives via the unauthenticated POST /traces endpoint), and runs.ts's
@@ -42,9 +43,28 @@ function railRow(run: RunSummary, activeTraceId: string | undefined, nowMs: numb
 	</a>`;
 }
 
+/** A session that has composition data (skills/files attached, context silently injected) but
+ * never produced a completed run -- the crashed/background-session case that `listCompositionOnlySessions`
+ * (composition.ts) surfaces. Renders a "no run" badge instead of a verdict dot, and a `Session
+ * <id prefix>` label instead of a goal, so it reads as distinct from -- not a 5th verdict state of
+ * -- a normal run row. */
+function compositionRow(session: CompositionSessionSummary, activeTraceId: string | undefined, nowMs: number): string {
+	const activeClass = session.traceId === activeTraceId ? " rail-row-active" : "";
+	const label = session.sessionId ? `Session ${session.sessionId.slice(0, 8)}` : "Unknown session";
+	return `<a class="rail-row rail-row-composition${activeClass}" href="/runs/${escapeHtml(session.traceId)}" data-trace-id="${escapeHtml(session.traceId)}">
+		<span class="rail-dot-goal"><span class="rail-badge-composition" title="No completed run">no run</span><span class="rail-goal">${escapeHtml(label)}</span></span>
+		<span class="rail-time">${escapeHtml(formatRelativeTime(session.lastActivityAt, nowMs))}</span>
+	</a>`;
+}
+
+/** A row the rail can render: a completed run, or a composition-only session with no completed
+ * run at all. See Task 2's brief (and composition.ts's listCompositionOnlySessions) for why the
+ * latter needs its own entry kind rather than being shoehorned into RunSummary. */
+export type RailEntry = { kind: "run"; run: RunSummary } | { kind: "composition"; session: CompositionSessionSummary };
+
 /** The inner HTML of the shell's `<nav id="rail">` -- never the `<nav>` wrapper itself, since the
  * client router replaces just this element's innerHTML on each rail poll (see app.ts). */
-export function renderRailBody(runs: RunSummary[], activeTraceId: string | undefined, nowMs: number): string {
-	if (runs.length === 0) return `<p class="rail-empty">No runs yet.</p>`;
-	return runs.map((r) => railRow(r, activeTraceId, nowMs)).join("");
+export function renderRailBody(entries: RailEntry[], activeTraceId: string | undefined, nowMs: number): string {
+	if (entries.length === 0) return `<p class="rail-empty">No runs yet.</p>`;
+	return entries.map((e) => (e.kind === "run" ? railRow(e.run, activeTraceId, nowMs) : compositionRow(e.session, activeTraceId, nowMs))).join("");
 }

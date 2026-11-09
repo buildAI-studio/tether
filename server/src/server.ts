@@ -12,11 +12,12 @@ import type Database from "better-sqlite3";
 import { insertSpan } from "./db.js";
 import { getRun, listRuns } from "./runs.js";
 import { getHarnessView } from "./harness.js";
-import { getCompositionView } from "./composition.js";
+import { getCompositionView, listCompositionOnlySessions } from "./composition.js";
 import { getCoverage } from "./coverage.js";
 import { getUsage } from "./analytics.js";
 import { renderDetailFragment, renderEmptyDetailPanel } from "./templates/flight-recorder.js";
 import { renderRailBody } from "./templates/rail.js";
+import type { RailEntry } from "./templates/rail.js";
 import { renderHarnessBody } from "./templates/harness.js";
 import { renderAnalyticsBody } from "./templates/analytics.js";
 import type { WidgetOption } from "./templates/analytics.js";
@@ -105,10 +106,22 @@ function decodeTraceIdOrShellError(
 	}
 }
 
-/** The rail's inner HTML for the 50 most recent runs, with `active` highlighted -- the same
- * `renderRailBody(listRuns(db, 50), active, Date.now())` call several routes below need. */
+/** The rail's inner HTML for the 50 most recent runs merged with the 50 most recent
+ * composition-only sessions (crashed/background sessions with no completed run -- see
+ * composition.ts's listCompositionOnlySessions), sorted by recency with `active` highlighted.
+ * ISO 8601 strings sort correctly with plain string comparison; a degraded empty timestamp from
+ * either summary type sorts to the end of this descending sort rather than crashing. */
 function buildRail(db: Database.Database, active: string | undefined): string {
-	return renderRailBody(listRuns(db, 50), active, Date.now());
+	const runEntries: RailEntry[] = listRuns(db, 50).map((run) => ({ kind: "run", run }));
+	const compositionEntries: RailEntry[] = listCompositionOnlySessions(db, 50).map((session) => ({ kind: "composition", session }));
+	const merged = [...runEntries, ...compositionEntries]
+		.sort((a, b) => {
+			const aTime = a.kind === "run" ? a.run.startedAt : a.session.lastActivityAt;
+			const bTime = b.kind === "run" ? b.run.startedAt : b.session.lastActivityAt;
+			return bTime.localeCompare(aTime);
+		})
+		.slice(0, 50);
+	return renderRailBody(merged, active, Date.now());
 }
 
 /** Every compatible installed plugin under `pluginsRoot`, grouped by the shell slot it replaces,
@@ -609,7 +622,7 @@ export function createTetherServer(db: Database.Database, options: { pluginsRoot
 					traceId = decoded;
 				}
 
-				const rail = renderRailBody(runs, traceId ?? undefined, Date.now());
+				const rail = buildRail(db, traceId ?? undefined);
 				if (traceId === null) {
 					const body = renderShell({ view: "detail" }, "Tether", rail, renderEmptyDetailPanel(), pluginsBySlot(pluginsRoot));
 					res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });

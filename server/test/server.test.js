@@ -427,6 +427,41 @@ describe("GET /harness (removed)", () => {
 	});
 });
 
+function compositionAttachmentPayload(traceId, { startTimeUnixNano = "1700000000000000000", sessionId = "sess-xyz" } = {}) {
+	return {
+		resourceSpans: [
+			{
+				resource: { attributes: [{ key: "service.name", value: { stringValue: "test" } }] },
+				scopeSpans: [
+					{
+						scope: { name: "test-scope", version: "0.1.0" },
+						spans: [
+							{
+								traceId,
+								spanId: "c".repeat(16),
+								parentSpanId: "d".repeat(16), // non-null -- never a root span, so listRuns excludes it
+								name: "composition_attachment",
+								kind: 1,
+								startTimeUnixNano,
+								endTimeUnixNano: startTimeUnixNano,
+								attributes: [
+									{ key: "gen_ai.harness.attachment.source", value: { stringValue: "pre_tool_use_hook" } },
+									{ key: "gen_ai.harness.attachment.kind", value: { stringValue: "tool_file" } },
+									{ key: "gen_ai.harness.attachment.name_or_path", value: { stringValue: "/a/b.ts" } },
+									{ key: "gen_ai.harness.attachment.size_bytes", value: { intValue: "7" } },
+									{ key: "gen_ai.harness.attachment.session_id", value: { stringValue: sessionId } },
+								],
+								events: [],
+								status: { code: 1 },
+							},
+						],
+					},
+				],
+			},
+		],
+	};
+}
+
 describe("GET /fragments/rail", () => {
 	test("returns the rail's inner HTML with the active run marked", async () => {
 		await withServer(async ({ port }) => {
@@ -435,6 +470,30 @@ describe("GET /fragments/rail", () => {
 			assert.equal(res.status, 200);
 			assert.equal(res.headers.get("content-type"), "text/html; charset=utf-8");
 			assert.match(await res.text(), /rail-row-active/);
+		});
+	});
+
+	test("merges a run and a composition-only session without duplicating or crashing on a malformed timestamp", async () => {
+		await withServer(async ({ port }) => {
+			const runTraceId = "a".repeat(32);
+			const compositionTraceId = "e".repeat(32);
+			await fetch(`http://127.0.0.1:${port}/traces`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(otlpPayload()) });
+			await fetch(`http://127.0.0.1:${port}/traces`, {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify(compositionAttachmentPayload(compositionTraceId, { startTimeUnixNano: "not-a-number" })),
+			});
+
+			const res = await fetch(`http://127.0.0.1:${port}/fragments/rail`);
+			assert.equal(res.status, 200);
+			const body = await res.text();
+
+			const runOccurrences = body.split(runTraceId).length - 1;
+			const compositionOccurrences = body.split(compositionTraceId).length - 1;
+			// Each row references its traceId exactly twice: once in href, once in data-trace-id.
+			assert.equal(runOccurrences, 2);
+			assert.equal(compositionOccurrences, 2);
+			assert.match(body, /rail-row-composition/);
 		});
 	});
 });
