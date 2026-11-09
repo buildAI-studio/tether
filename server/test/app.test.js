@@ -937,3 +937,60 @@ describe("renderDiffs", () => {
 		assert.ok(html.includes("4KB") || html.includes("4096"), "the omitted size must still be stated");
 	});
 });
+
+describe("composition-only sessions", () => {
+	test("navigateTo mounts a #composition-data island, sets the title, and resolves the current state's traceId from the fetched composition data (not the URL's traceId)", async () => {
+		const { elements, windowStub, sandbox } = loadApp();
+		// Same technique as the "/" Harness-tab-resolution test above: wire up a fake Harness tab so
+		// we can observe what traceId navigateTo actually resolved to, without reaching into
+		// currentState directly (it's a `let` binding, not exposed on the sandbox).
+		const harnessTab = new FakeElement("harnessTab", null);
+		let setHref = null;
+		harnessTab.setAttribute = (n, v) => { if (n === "href") setHref = v; };
+		harnessTab.removeAttribute = () => {};
+		harnessTab.classList = { toggle() {}, contains() { return false; }, add() {}, remove() {} };
+		sandbox.document.querySelector = (sel) => (sel === '[data-nav="harness"]' ? harnessTab : null);
+
+		// Deliberately different from the URL's traceId -- proves navigateTo reads the traceId back
+		// out of the mounted #composition-data island (mountCompositionDataIfPresent's return value),
+		// not target.traceId parsed from the URL.
+		const urlTraceId = "p".repeat(32);
+		const dataTraceId = "q".repeat(32);
+		const compositionData = {
+			traceId: dataTraceId,
+			entries: [{ source: "hook", kind: "skill", nameOrPath: "superpowers:brainstorming", sizeBytes: 42, sessionId: "s".repeat(32), timestamp: "2024-01-01T00:00:00Z" }],
+		};
+		const compositionHtml = '<script type="application/json" id="composition-data">' + JSON.stringify(compositionData) + "</script>";
+		windowStub.fetch = () => Promise.resolve({ ok: true, status: 200, text: () => Promise.resolve(compositionHtml) });
+
+		await sandbox.navigateTo("/runs/" + urlTraceId, true);
+
+		assert.match(elements.compositionEntries.innerHTML, /superpowers:brainstorming/);
+		assert.match(sandbox.document.title, /Composition/);
+		assert.equal(setHref, "/runs/" + dataTraceId + "/harness");
+	});
+
+	// Regression test for the bug Task 4 found and fixed by hand: a direct page load (bookmark,
+	// refresh, shared link) of a composition-only session's URL is server-rendered with
+	// #composition-data already in the DOM -- init()'s hydration path (not navigateTo's
+	// fetch-based one) is what has to mount it. This was unguarded by any automated test until now.
+	test("init(), given a bootstrapped detail state and a #composition-data island already in the DOM (a direct page load), populates #compositionEntries", () => {
+		const { elements, windowStub, sandbox } = loadApp();
+		const traceId = "r".repeat(32);
+		const compositionData = {
+			traceId,
+			entries: [{ source: "hook", kind: "skill", nameOrPath: "superpowers:brainstorming", sizeBytes: 42, sessionId: "s".repeat(32), timestamp: "2024-01-01T00:00:00Z" }],
+		};
+		// Mirrors seedWidgetPicker's convention above: assign straight into the `elements` map to
+		// simulate an element the server already rendered into the page, bypassing getOrCreate.
+		const compositionEl = new FakeElement("composition-data");
+		compositionEl.textContent = JSON.stringify(compositionData);
+		elements["composition-data"] = compositionEl;
+
+		windowStub.__TETHER_INITIAL__ = { view: "detail", traceId };
+
+		sandbox.init();
+
+		assert.match(elements.compositionEntries.innerHTML, /superpowers:brainstorming/);
+	});
+});
