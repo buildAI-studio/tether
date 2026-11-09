@@ -476,15 +476,46 @@ a different id space from a run's random `traceId` — documented in
 random traceId, making that entry unreachable via the API (the local
 JSONL log remains the only record for it).
 
-§3's UI panel and §5 (Trail-side rendering, a hosted relay) are still not
-built — confirmed out of scope for the server-ingestion plan, by design.
-Known follow-ups from that plan's final review, not yet done: batching
-multiple entries into one OTLP request instead of one HTTP POST per
-entry; a cross-package integration test that actually posts an
+§3's UI panel shipped too, per the resolved §6 design — `server/src/
+composition.ts`'s `listCompositionOnlySessions`, `rail.ts`'s merged
+rail, `composition-detail.ts`'s fragment, and `app.ts`'s client mounting,
+plan `docs/superpowers/plans/2026-11-09-composition-ui-panel.md`.
+§5 (Trail-side rendering, a hosted relay) is still not built — out of
+scope by design, unchanged.
+
+**A real consequence of §6's own design, found only once the UI actually
+shipped and could be looked at as a whole, not caught by the design
+discussion itself:** composition hooks fire on *every* Claude Code
+session (per `mcp/README.md`'s registration), not only crashed/background
+ones, and a composition session's `traceId` (session-derived) is never
+the same as a run's `traceId` (random) — nothing links the two. So an
+ordinary session that completes a normal run *also* produces a second,
+separate composition-only rail row for the same work. This is not a bug
+in the merge logic (verified: a `traceId` can never be both a run and a
+composition-only entry, and the two never collide) — it's an inherent
+consequence of §6's own resolved design, which the UI copy originally
+described in a way that implied something had gone wrong ("no completed
+run"). Fixed at the copy level (rail badge/tooltip, detail mission line,
+`server/README.md` now describe this as "not linked to a run," covering
+the common case honestly) rather than the architecture — the real fix,
+linking a run to the session it ran in so the rows could merge into one,
+is a genuinely separate, larger piece of work (would need `trail_start_run`
+to capture and report `session_id` too, which it doesn't today), tracked
+here as a known follow-up, not attempted.
+
+Known follow-ups, not yet done: the run/session-linking idea above;
+batching multiple entries into one OTLP request instead of one HTTP POST
+per entry; a cross-package integration test that actually posts an
 `mcp`-built payload through `/traces` and reads it back via
 `/api/v1/composition` (today each package's tests construct its half of
 the wire format by hand, so nothing yet proves the two sides' attribute
-names stay in sync beyond careful reading).
+names stay in sync beyond careful reading); moving `listCompositionOnlySessions`'s
+attachment-attribute filter into SQL instead of an in-memory per-candidate
+check, which would also fix a separate known limitation where the `LIMIT`
+is applied before that filter and could under-return genuinely
+composition-only sessions at scale; disabling the Harness tab for a
+composition-only session (it's currently enabled but always 404s, since
+`getHarnessView` also requires a root span).
 
 **A real gap the spec's own text didn't anticipate, found by the final
 whole-branch review against the user's actual local transcripts, not
