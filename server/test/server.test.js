@@ -396,6 +396,31 @@ describe("GET /runs/:traceId", () => {
 			assert.match(text, /id="composition-data"/);
 		});
 	});
+
+	test("still 404s (shell-wrapped) for a crashed self-reported run (real step data, no root, no attachment data)", async () => {
+		await withServer(async ({ db, port }) => {
+			const traceId = "m".repeat(32);
+			const raw = JSON.stringify({
+				attributes: [{ key: "gen_ai.harness.source_type", value: { stringValue: "skill" } }],
+				status: { code: 1 },
+			});
+			insertSpan(db, {
+				traceId,
+				spanId: "n".repeat(16),
+				parentSpanId: "some-nonexistent-root",
+				name: "step",
+				startTimeUnixNano: "1700000000000000000",
+				endTimeUnixNano: "1700000000000000000",
+				raw,
+			});
+			const res = await fetch(`http://127.0.0.1:${port}/runs/${traceId}`);
+			assert.equal(res.status, 404);
+			const text = await res.text();
+			assert.match(text, /Run not found/);
+			assert.match(text, /class="shell"/);
+			assert.doesNotMatch(text, /id="composition-data"/);
+		});
+	});
 });
 
 describe("GET /runs/:traceId/harness", () => {
@@ -697,6 +722,39 @@ describe("GET /fragments/detail (I2: server-side resolution of '/')", () => {
 			const res = await fetch(`http://127.0.0.1:${port}/fragments/detail`);
 			assert.equal(res.status, 200);
 			assert.match(await res.text(), /id="run-data"/);
+		});
+	});
+
+	// Unlike /fragments/detail/:traceId and /runs/:traceId, this route never passes an arbitrary
+	// traceId to renderDetailOrComposition -- its traceId always comes from listRuns(db, 50)[0],
+	// which only ever returns traceIds with a root span (a real run). A crashed self-reported run
+	// (real step data, no root, no attachment attributes) can therefore never reach this route's
+	// helper call at all, let alone its 404 branch: it isn't a candidate for "most recent run" in
+	// the first place, so this guards the upstream resolution instead of the helper's fallback --
+	// a store containing only such a trace still degrades to the ordinary empty-store panel, not a
+	// crash and not a leaked composition/self-reported render.
+	test("a store containing only a crashed self-reported run (no real runs) still returns the empty detail panel, not a crash or a leaked render", async () => {
+		await withServer(async ({ db, port }) => {
+			const traceId = "k".repeat(32);
+			const raw = JSON.stringify({
+				attributes: [{ key: "gen_ai.harness.source_type", value: { stringValue: "skill" } }],
+				status: { code: 1 },
+			});
+			insertSpan(db, {
+				traceId,
+				spanId: "l".repeat(16),
+				parentSpanId: "some-nonexistent-root",
+				name: "step",
+				startTimeUnixNano: "1700000000000000000",
+				endTimeUnixNano: "1700000000000000000",
+				raw,
+			});
+			const res = await fetch(`http://127.0.0.1:${port}/fragments/detail`);
+			assert.equal(res.status, 200);
+			const text = await res.text();
+			assert.match(text, /No runs yet/);
+			assert.doesNotMatch(text, /id="composition-data"/);
+			assert.doesNotMatch(text, /id="run-data"/);
 		});
 	});
 });
