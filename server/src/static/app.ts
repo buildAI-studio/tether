@@ -5,7 +5,16 @@
 // mountDetailPanel/navigateTo/parsePathname directly as sandbox properties. Don't "fix" this by
 // wrapping the file in an IIFE -- it'll silently break every router test.
 
-type RunData = import("../runs.js").RunView & { coverage: import("../coverage.js").CoverageView | null };
+// `composition` mirrors exactly what server/src/templates/flight-recorder.ts's
+// renderDetailFragment embeds: the full CompositionView object ({entries: [...]}), not a bare
+// entries array -- same inline-type-query convention `coverage` already uses just below for
+// CoverageView. (Confirmed against the real wire format: server/test/server.test.js's
+// "includes the run's own composition data when its session is linked" asserts
+// `json.composition.entries.length`, i.e. the entries are nested one level under `composition`.)
+type RunData = import("../runs.js").RunView & {
+	coverage: import("../coverage.js").CoverageView | null;
+	composition: import("../composition.js").CompositionView | null;
+};
 
 // Mirrors server/src/composition.ts's CompositionEntry -- deliberately redeclared rather than
 // imported (same convention RunData above follows for RunView/CoverageView): this file compiles
@@ -323,6 +332,17 @@ function mountDetailPanel(runData: RunData): () => void {
 			+ '<div class="insp-section"><h3>MCP servers</h3>' + coverageList(mcpServers, "No MCP servers registered for this run.") + "</div>";
 	}
 
+	// Mirrors renderCoverage()'s exact structure. `runData.composition` is the nested
+	// CompositionView ({entries: [...]} | null), not a bare array -- unwrap `.entries` before
+	// handing it to renderCompositionEntries (already shared with the standalone
+	// composition-only page via mountCompositionDataIfPresent); that helper already renders the
+	// "No composition data for this session." empty state for a zero-length array, so an absent
+	// composition (null) or one with no entries both fall through to the same message.
+	function renderComposition(): void {
+		const comp = runData.composition, el = $("compositionEntries");
+		el.innerHTML = renderCompositionEntries(comp?.entries ?? []);
+	}
+
 	function renderStepIO(s: RunData["steps"][number], i: number): void {
 		$("inspTitle").textContent = s.title + " · step " + (i + 1);
 		const insp = $("insp");
@@ -416,7 +436,7 @@ function mountDetailPanel(runData: RunData): () => void {
 		document.addEventListener("keydown", onDocumentKeydown);
 	}
 
-	renderMission(); renderStrip(); renderSteps(); renderInspector(); renderCoverage(); updatePlayhead(); initControls();
+	renderMission(); renderStrip(); renderSteps(); renderInspector(); renderCoverage(); renderComposition(); updatePlayhead(); initControls();
 
 	return function unmount(): void {
 		if (raf != null) cancelAnimationFrame(raf);

@@ -20,6 +20,7 @@ function makeRunData(overrides = {}) {
 			{ type: "tool", title: "run tests", status: "ok", start: 0, dur: 5, cost: 0.05, tok: 500, io: [["Input", "pytest -x"], ["Output", "1 passed"]] },
 		],
 		coverage: null,
+		composition: null,
 		...overrides,
 	};
 }
@@ -214,6 +215,24 @@ describe("mountDetailPanel", () => {
 		assert.equal((windowListeners.mousemove ?? []).length, 0);
 		assert.equal((windowListeners.mouseup ?? []).length, 0);
 		assert.equal((documentListeners.keydown ?? []).length, 0);
+	});
+
+	test("renders a run's linked composition entries into #compositionEntries", () => {
+		const { elements, mountDetailPanel } = loadApp();
+		// composition is the nested CompositionView shape ({entries: [...]}) that
+		// renderDetailFragment actually embeds in #run-data -- not a bare entries array.
+		mountDetailPanel(makeRunData({
+			composition: {
+				entries: [{ source: "pre_tool_use_hook", kind: "tool_file", nameOrPath: "/a.ts", sizeBytes: 5, sessionId: "s1", timestamp: "2026-11-09T00:00:00.000Z" }],
+			},
+		}));
+		assert.match(elements.compositionEntries.innerHTML, /\/a\.ts/);
+	});
+
+	test("shows the empty state in #compositionEntries when composition is null", () => {
+		const { elements, mountDetailPanel } = loadApp();
+		mountDetailPanel(makeRunData({ composition: null }));
+		assert.match(elements.compositionEntries.innerHTML, /No composition data for this session\./);
 	});
 });
 
