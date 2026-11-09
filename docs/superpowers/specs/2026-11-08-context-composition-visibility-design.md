@@ -382,9 +382,78 @@ Still open, genuinely undecided:
   (`gen_ai.harness.attachment.*`) versus a dedicated endpoint — reusing
   OTLP keeps one pipe and is the likely answer, but verify against
   `otlp.ts`/`runs.ts` before committing.
-- **UI placement**: new tab in the shell vs. augmenting Harness anatomy —
-  lean toward a new tab (my call, stated here so it can be revisited), not
-  agreed upon with the user beyond this document.
+- **UI placement**: resolved 2026-11-09 — see the new "§6 UI design"
+  section below. Neither of the two guesses this bullet originally
+  offered turned out right; the real investigation found a third option.
+
+## §6: UI design (resolved 2026-11-09, supersedes the §3 "UI placement" guess)
+
+Investigated against the real code, not guessed: where Coverage overlay
+(a precedent for "a related view nested inside Detail") actually lives,
+how the rail lists runs, and what the Detail route does for a traceId
+with no run.
+
+**Coverage nests inside the existing Detail/Flight-Recorder view**
+(`server/src/templates/flight-recorder.ts`'s `SKELETON` has a `<section
+class="panel">`/`<h2>Coverage</h2>` block; `renderDetailFragment` merges
+`{...run, coverage}` into one JSON island) — not a 4th tab. The plugin
+system's three slots (Detail/Harness/Analytics) are the only top-level
+divisions; a new top-level tab would need to touch `app.ts`'s closed
+`ShellState["view"]` union, `shell.ts`'s tab-bar markup, and a new
+`/fragments/<name>` route — real cost for no benefit here.
+
+**But composition data can't nest inside an existing run's Detail view
+the way Coverage does, and this is the one thing the earlier §3 guess
+missed entirely:** Coverage's spans share the run's own `traceId` (they
+*are* the run's self-reported steps). Composition spans use a
+*different* `traceId` space — derived from the Claude Code `session_id`,
+not the run's random `hexId(16)` (§1, §3 confirm: `mcp/src/hooks/
+deliver.ts`'s `traceIdFromSessionId`). Nothing today links a run to the
+session it ran in, so there is no `traceId` a Detail page could use to
+look up "this run's composition data" even if we wanted to nest it. And
+the whole motivating case — a crashed/background session — has no run at
+all, so "nest inside the run's Detail view" couldn't show the headline
+case's data regardless.
+
+**Resolved design:** composition-only sessions get their own render path
+through the *existing* Detail route and URL shape (`/runs/:traceId`,
+`/fragments/detail/:traceId`), not a new route or a new top-level tab.
+Concretely:
+
+1. **Rail merge.** `server/src/composition.ts` gains
+   `listCompositionOnlySessions(db, limit): CompositionSessionSummary[]`
+   — distinct `traceId`s among `spans` that have no `parentSpanId IS
+   NULL` row (so a traceId can never double as both a run and a
+   composition-only session — the two id spaces are disjoint by
+   construction, this is just defensive) and do carry at least one
+   `gen_ai.harness.attachment.*`-shaped span. `server/src/templates/
+   rail.ts` gains a `RailEntry = {kind:"run"; run: RunSummary} |
+   {kind:"composition"; session: CompositionSessionSummary}` union;
+   `renderRailBody` takes `RailEntry[]` and renders a composition row
+   with a distinct badge ("no run · composition only") instead of a
+   verdict dot. `server.ts`'s `buildRail` merges `listRuns` +
+   `listCompositionOnlySessions`, sorted together by recency, before
+   rendering — so a crashed/background session becomes *discoverable*
+   in the rail without already knowing its session id, which was the
+   gap every earlier plan in this series deliberately deferred.
+2. **Detail fallback.** The three places that call `getRun` and 404 on
+   null (`/fragments/detail`, `/fragments/detail/:traceId`, and the
+   initial full-page shell route) fall back to `getCompositionView`
+   before 404ing: a run renders as today; no run but real composition
+   data renders a new, much simpler composition-only fragment (a new
+   template, not `flight-recorder.ts`'s run-shaped skeleton — no
+   timeline/cost/steps, just the attachment entries list); truly nothing
+   for that `traceId` still 404s exactly as before.
+3. **Client mounting.** `app.ts` keeps its existing route shape
+   (`/runs/:traceId` → `{view:"detail", traceId}` → `/fragments/detail/
+   :traceId`) unchanged. `mountRunDataIfPresent` gets a composition-data
+   sibling check (a different `<script type="application/json">` island
+   id, since composition data isn't `RunData`-shaped) so the same
+   navigation path mounts whichever content the server actually sent.
+
+This keeps the plugin system's three slots exactly as they are, costs no
+new top-level route, and directly fixes the rail-discoverability gap
+flagged (and deferred) in every prior plan in this series.
 
 ## Implementation status (as of 2026-11-09)
 
