@@ -515,20 +515,29 @@ never a hard dependency.
    `renderDetailFragment` gains a third parameter, `composition:
    CompositionView | null`, embedded into the same `#run-data` JSON
    island (`{...run, coverage, composition}`) rather than a second
-   island. The skeleton gains an "Attached" section using the *same*
-   element ids `composition-detail.ts` already uses
-   (`composition-mission`/`compositionCount`/`compositionEntries`) —
-   safe because a page never renders both skeletons at once, so there's
-   no id collision, and it lets the client reuse one rendering function
-   instead of two. Follow the same pattern already established for the
-   existing "Coverage" section (always present in the skeleton,
-   client-side code decides what to show) rather than inventing a new
-   conditional-skeleton mechanism.
+   island. The skeleton gains an "Attached" section reusing one of the
+   same element ids `composition-detail.ts` already uses: just
+   `compositionEntries`, not `composition-mission`/`compositionCount` —
+   those two are specific to the standalone composition-only fragment's
+   own mission-line/count-badge chrome, which this run-nested "Attached"
+   section does not have; it is just the Coverage-style panel heading
+   plus the entries list. Safe because a page never renders both
+   skeletons at once, so there's no id collision, and it lets the client
+   reuse the entry-list rendering function instead of duplicating it.
+   Follow the same pattern already established for the existing
+   "Coverage" section (always present in the skeleton, client-side code
+   decides what to show) rather than inventing a new conditional-skeleton
+   mechanism.
 5. **`app.ts`**: the entry-list rendering logic `mountCompositionDataIfPresent`
-   already built becomes a shared helper, called from both
-   `mountCompositionDataIfPresent` (the standalone composition-only case,
-   unchanged) and `mountRunDataIfPresent` (new: renders into the
-   "Attached" section when `runData.composition` is present and non-empty).
+   already built becomes a shared helper (`renderCompositionEntries`),
+   called from both `mountCompositionDataIfPresent` (the standalone
+   composition-only case, unchanged) and a new `renderComposition()`
+   mirroring `renderCoverage()`'s own structure: called unconditionally
+   on every Detail render, not gated on `runData.composition` being
+   present or non-empty. An absent (`null`) composition and an empty one
+   both fall through to the same "No composition data for this session."
+   empty state, matching the Coverage section's own always-rendered
+   convention rather than conditionally omitting the section.
 
 **Non-goal:** this does not change anything about how composition data
 without *any* matching run still works — §6's rail-merge, the
@@ -576,16 +585,32 @@ in the merge logic (verified: a `traceId` can never be both a run and a
 composition-only entry, and the two never collide) — it's an inherent
 consequence of §6's own resolved design, which the UI copy originally
 described in a way that implied something had gone wrong ("no completed
-run"). Fixed at the copy level (rail badge/tooltip, detail mission line,
-`server/README.md` now describe this as "not linked to a run," covering
-the common case honestly) rather than the architecture — the real fix,
-linking a run to the session it ran in so the rows could merge into one,
-is a genuinely separate, larger piece of work (would need `trail_start_run`
-to capture and report `session_id` too, which it doesn't today), tracked
-here as a known follow-up, not attempted.
+run"). Fixed at the copy level at the time (rail badge/tooltip, detail
+mission line, `server/README.md` described this as "not linked to a run,"
+covering the common case honestly) rather than the architecture — the real
+fix, linking a run to the session it ran in so the rows could merge into
+one, was a genuinely separate, larger piece of work, tracked at the time
+as a known follow-up, not yet attempted.
 
-Known follow-ups, not yet done: the run/session-linking idea above;
-batching multiple entries into one OTLP request instead of one HTTP POST
+**§7 has since shipped** (resolved design above, implemented and reviewed
+2026-11-09): `mcp/`'s `trail_finish_run` tags the run's root span with
+`gen_ai.harness.session_id`, read from `process.env.CLAUDE_CODE_SESSION_ID`
+— not `trail_start_run`, since the env var is only read at finish time, and
+not a capture-and-report round trip through any tool argument. Server-side,
+`server/src/runs.ts` exposes that id as `sessionId` on `RunView`/`RunSummary`
+and `listLinkedSessionIds(db)` scans root spans for it;
+`server/src/composition.ts`'s `listCompositionOnlySessions` takes that set
+and skips any composition-only candidate whose session already has a linked
+run, which is what actually removes the duplicate rail row, at the source.
+The run's own linked composition data isn't just hidden, though — it's
+surfaced: `getCompositionViewForSessionId(db, sessionId)` is nested into the
+run's own Detail view as a new "Attached" section (`flight-recorder.ts`'s
+skeleton, `app.ts`'s client-side rendering — see §7.4/§7.5 above for the
+exact shape that shipped), so a successful run's silently-injected context
+is still visible, just inside the run's own view instead of as a second
+rail row.
+
+Known follow-ups, not yet done: batching multiple entries into one OTLP request instead of one HTTP POST
 per entry; a cross-package integration test that actually posts an
 `mcp`-built payload through `/traces` and reads it back via
 `/api/v1/composition` (today each package's tests construct its half of
