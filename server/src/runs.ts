@@ -13,6 +13,7 @@ export interface RetrySignal {
 	kind: "retry";
 	count: number;
 	detail: string;
+	argsDiff?: { key: string; before: unknown; after: unknown }[];
 }
 
 export interface DiffView {
@@ -238,6 +239,39 @@ function buildStepIo(events: { name: string; attributes: AttrMap }[]): [string, 
 
 const MIN_RETRY_RUN = 3;
 
+/** Returns a step's decoded "Input" io value, or undefined if the step logged none. */
+function stepInput(step: StepView): unknown {
+	return step.io.find(([label]) => label === "Input")?.[1];
+}
+
+/** True for a plain JSON object (not null, not an array) -- `typeof null === "object"` in JS, so
+ * null must be excluded explicitly or a caller indexing into it with Object.keys would throw. */
+function isStructuredObject(v: unknown): v is Record<string, unknown> {
+	return v !== null && typeof v === "object" && !Array.isArray(v);
+}
+
+/** Shallow one-level diff between two retry attempts' decoded structured Input args, or undefined
+ * if either side isn't a structured object (legacy plain-text args, a JSON array/null, or no Input
+ * at all) -- "couldn't compare" (undefined) is distinct from "compared, nothing/something differs"
+ * (an array, possibly empty). */
+function buildArgsDiff(prev: StepView, cur: StepView): RetrySignal["argsDiff"] {
+	const before = stepInput(prev);
+	const after = stepInput(cur);
+	if (!isStructuredObject(before) || !isStructuredObject(after)) return undefined;
+	const keys = new Set([...Object.keys(before), ...Object.keys(after)]);
+	const diff: { key: string; before: unknown; after: unknown }[] = [];
+	for (const key of keys) {
+		const hasBefore = key in before;
+		const hasAfter = key in after;
+		if (!hasBefore || !hasAfter) {
+			diff.push({ key, before: hasBefore ? before[key] : undefined, after: hasAfter ? after[key] : undefined });
+		} else if (JSON.stringify(before[key]) !== JSON.stringify(after[key])) {
+			diff.push({ key, before: before[key], after: after[key] });
+		}
+	}
+	return diff;
+}
+
 function detectRetries(steps: StepView[]): void {
 	let i = 0;
 	while (i < steps.length) {
@@ -247,7 +281,8 @@ function detectRetries(steps: StepView[]): void {
 		if (runLength >= MIN_RETRY_RUN) {
 			for (let k = i + 1; k < j; k++) {
 				const count = k - i + 1;
-				steps[k].sig = [{ kind: "retry", count, detail: `Attempt ${count} of "${steps[i].title}" — same failure as before.` }];
+				const argsDiff = buildArgsDiff(steps[k - 1], steps[k]);
+				steps[k].sig = [{ kind: "retry", count, detail: `Attempt ${count} of "${steps[i].title}" — same failure as before.`, ...(argsDiff ? { argsDiff } : {}) }];
 			}
 		}
 		i = j > i ? j : i + 1;

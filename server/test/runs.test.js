@@ -325,6 +325,136 @@ describe("getRun", () => {
 		}
 	});
 
+	test("includes an argsDiff with one entry per changed key between consecutive retry attempts", () => {
+		const dbPath = makeTempDbPath();
+		const db = openDatabase(dbPath);
+		try {
+			insertSpan(db, rootSpan({ traceId: "t20", spanId: "r20", goal: "g", agent: "a", startNs: "1000000000000", endNs: "1100000000000" }));
+			const inputs = [{ file: "a.ts", text: "x" }, { file: "a.ts", text: "y" }, { file: "b.ts", text: "y" }];
+			inputs.forEach((input, i) => {
+				const ns = String(1010000000000 + i * 2000000000);
+				insertSpan(db, structuredStepSpan({ traceId: "t20", spanId: "s" + i, parentSpanId: "r20", name: "edit_file", startNs: ns, endNs: String(Number(ns) + 1000000000), toolName: "edit_file", isError: true, input }));
+			});
+			const run = getRun(db, "t20");
+			assert.equal(run.steps[0].sig, undefined);
+			assert.deepEqual(run.steps[1].sig[0].argsDiff, [{ key: "text", before: "x", after: "y" }]);
+			assert.deepEqual(run.steps[2].sig[0].argsDiff, [{ key: "file", before: "a.ts", after: "b.ts" }]);
+		} finally {
+			db.close();
+			rmSync(join(dbPath, ".."), { recursive: true, force: true });
+		}
+	});
+
+	test("includes an empty argsDiff when a retry attempt repeats identical structured args", () => {
+		const dbPath = makeTempDbPath();
+		const db = openDatabase(dbPath);
+		try {
+			insertSpan(db, rootSpan({ traceId: "t21", spanId: "r21", goal: "g", agent: "a", startNs: "1000000000000", endNs: "1100000000000" }));
+			for (let i = 0; i < 3; i++) {
+				const ns = String(1010000000000 + i * 2000000000);
+				insertSpan(db, structuredStepSpan({ traceId: "t21", spanId: "s" + i, parentSpanId: "r21", name: "edit_file", startNs: ns, endNs: String(Number(ns) + 1000000000), toolName: "edit_file", isError: true, input: { file: "a.ts" } }));
+			}
+			const run = getRun(db, "t21");
+			assert.deepEqual(run.steps[1].sig[0].argsDiff, []);
+			assert.deepEqual(run.steps[2].sig[0].argsDiff, []);
+		} finally {
+			db.close();
+			rmSync(join(dbPath, ".."), { recursive: true, force: true });
+		}
+	});
+
+	test("omits argsDiff entirely when a retry attempt's args are legacy plain-text, not structured", () => {
+		const dbPath = makeTempDbPath();
+		const db = openDatabase(dbPath);
+		try {
+			insertSpan(db, rootSpan({ traceId: "t22", spanId: "r22", goal: "g", agent: "a", startNs: "1000000000000", endNs: "1100000000000" }));
+			for (let i = 0; i < 3; i++) {
+				const ns = String(1010000000000 + i * 2000000000);
+				// A plain, non-JSON prompt string: decodeIoValue's JSON.parse fails and it falls back to
+				// the raw string (pre-Phase-1 shape), which must fail isStructuredObject.
+				insertSpan(db, stepSpan({ traceId: "t22", spanId: "s" + i, parentSpanId: "r22", name: "run tests", startNs: ns, endNs: String(Number(ns) + 1000000000), toolName: "run tests", isError: true, prompt: "run the suite" }));
+			}
+			const run = getRun(db, "t22");
+			assert.deepEqual(run.steps[1].sig, [{ kind: "retry", count: 2, detail: run.steps[1].sig[0].detail }]);
+			assert.equal("argsDiff" in run.steps[1].sig[0], false);
+		} finally {
+			db.close();
+			rmSync(join(dbPath, ".."), { recursive: true, force: true });
+		}
+	});
+
+	test("omits argsDiff when a retried attempt's structured Input is a JSON array, not an object", () => {
+		const dbPath = makeTempDbPath();
+		const db = openDatabase(dbPath);
+		try {
+			insertSpan(db, rootSpan({ traceId: "t23", spanId: "r23", goal: "g", agent: "a", startNs: "1000000000000", endNs: "1100000000000" }));
+			for (let i = 0; i < 3; i++) {
+				const ns = String(1010000000000 + i * 2000000000);
+				insertSpan(db, structuredStepSpan({ traceId: "t23", spanId: "s" + i, parentSpanId: "r23", name: "batch_run", startNs: ns, endNs: String(Number(ns) + 1000000000), toolName: "batch_run", isError: true, input: ["a", "b"] }));
+			}
+			const run = getRun(db, "t23");
+			assert.equal("argsDiff" in run.steps[1].sig[0], false);
+		} finally {
+			db.close();
+			rmSync(join(dbPath, ".."), { recursive: true, force: true });
+		}
+	});
+
+	test("omits argsDiff when a retried attempt's structured Input is JSON null", () => {
+		const dbPath = makeTempDbPath();
+		const db = openDatabase(dbPath);
+		try {
+			insertSpan(db, rootSpan({ traceId: "t24", spanId: "r24", goal: "g", agent: "a", startNs: "1000000000000", endNs: "1100000000000" }));
+			for (let i = 0; i < 3; i++) {
+				const ns = String(1010000000000 + i * 2000000000);
+				insertSpan(db, structuredStepSpan({ traceId: "t24", spanId: "s" + i, parentSpanId: "r24", name: "ping", startNs: ns, endNs: String(Number(ns) + 1000000000), toolName: "ping", isError: true, input: null }));
+			}
+			const run = getRun(db, "t24");
+			assert.equal("argsDiff" in run.steps[1].sig[0], false);
+		} finally {
+			db.close();
+			rmSync(join(dbPath, ".."), { recursive: true, force: true });
+		}
+	});
+
+	test("omits argsDiff when a retried step has no Input entry at all", () => {
+		const dbPath = makeTempDbPath();
+		const db = openDatabase(dbPath);
+		try {
+			insertSpan(db, rootSpan({ traceId: "t25", spanId: "r25", goal: "g", agent: "a", startNs: "1000000000000", endNs: "1100000000000" }));
+			for (let i = 0; i < 3; i++) {
+				const ns = String(1010000000000 + i * 2000000000);
+				// stepSpan with no prompt/completion -- no "Input" entry ends up in io at all.
+				insertSpan(db, stepSpan({ traceId: "t25", spanId: "s" + i, parentSpanId: "r25", name: "noop", startNs: ns, endNs: String(Number(ns) + 1000000000), toolName: "noop", isError: true }));
+			}
+			const run = getRun(db, "t25");
+			assert.equal("argsDiff" in run.steps[1].sig[0], false);
+		} finally {
+			db.close();
+			rmSync(join(dbPath, ".."), { recursive: true, force: true });
+		}
+	});
+
+	test("flags a changed key via value-equality even when the value is a nested object", () => {
+		const dbPath = makeTempDbPath();
+		const db = openDatabase(dbPath);
+		try {
+			insertSpan(db, rootSpan({ traceId: "t26", spanId: "r26", goal: "g", agent: "a", startNs: "1000000000000", endNs: "1100000000000" }));
+			const inputs = [{ opts: { retries: 1 } }, { opts: { retries: 2 } }];
+			inputs.forEach((input, i) => {
+				const ns = String(1010000000000 + i * 2000000000);
+				insertSpan(db, structuredStepSpan({ traceId: "t26", spanId: "s" + i, parentSpanId: "r26", name: "call", startNs: ns, endNs: String(Number(ns) + 1000000000), toolName: "call", isError: true, input }));
+			});
+			// A 3rd identical-to-2nd attempt so the retry-run threshold (3) is met.
+			insertSpan(db, structuredStepSpan({ traceId: "t26", spanId: "s2", parentSpanId: "r26", name: "call", startNs: "1014000000000", endNs: "1015000000000", toolName: "call", isError: true, input: inputs[1] }));
+			const run = getRun(db, "t26");
+			assert.deepEqual(run.steps[1].sig[0].argsDiff, [{ key: "opts", before: { retries: 1 }, after: { retries: 2 } }]);
+		} finally {
+			db.close();
+			rmSync(join(dbPath, ".."), { recursive: true, force: true });
+		}
+	});
+
 	test("reshapes a step's source_type/source_name attribution when present", () => {
 		const dbPath = makeTempDbPath();
 		const db = openDatabase(dbPath);
