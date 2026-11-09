@@ -349,6 +349,12 @@ exactly as they did before — nothing is migrated or rewritten.
   50 entries with descriptions truncated to 300 characters, so the combined
   attribute stays well within the server's request size limit even with
   all four categories populated.
+- When running under Claude Code, the root span `trail_finish_run` emits also
+  carries a `gen_ai.harness.session_id` attribute, read directly from the
+  process's own `CLAUDE_CODE_SESSION_ID` environment variable — this is
+  best-effort (present only when that variable is set, never required) and
+  lets Tether's server link the run to its own composition data instead of
+  showing it as a separate, unlinked entry.
 - With no env vars set at all, `trail_start_run`/`trail_finish_run`/etc. point at
   `http://localhost:4319` with no auth headers — the default for a local,
   self-hosted Tether instance (see `server/`). Set `TRAIL_URL` +

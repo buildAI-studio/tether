@@ -1,6 +1,6 @@
 {
   "name": "trailai-mcp",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "Trail MCP server — coding agents authenticate with a Trail API key and stream their runs into Trail as traces.",
   "type": "module",
   "bin": { "trailai-mcp": "dist/index.js" },

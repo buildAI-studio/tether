@@ -351,6 +351,7 @@ export function buildTrailServer(cfg: TrailConfig, judgeCfg: JudgeConfig | undef
 					"gen_ai.agent.name": run.agent,
 					"gen_ai.agent.goal": run.name,
 					"gen_ai.agent.harness_manifest": JSON.stringify(run.manifest),
+					"gen_ai.harness.session_id": process.env.CLAUDE_CODE_SESSION_ID,
 					...(verdict
 						? {
 								"gen_ai.agent.verdict": verdict.verdict,

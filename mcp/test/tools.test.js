@@ -1,8 +1,39 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { buildStepSpan, buildLlmCallSpan, buildExceptionSpan } from "../dist/tools.js";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { buildStepSpan, buildLlmCallSpan, buildExceptionSpan, buildTrailServer } from "../dist/tools.js";
 
 const RUN = { traceId: "t".repeat(32), rootSpanId: "r".repeat(16), agent: "coding-agent" };
+
+// trail_finish_run builds its root span's attributes inline (no pure builder
+// function to call directly), so to inspect what it sends we run it through
+// a real McpServer <-> Client pair over an in-memory transport and stub
+// global.fetch to capture the OTLP payload sendSpan posts.
+async function finishRunAndCaptureSpanAttributes() {
+	const originalFetch = global.fetch;
+	let capturedBody;
+	global.fetch = async (_url, opts) => {
+		capturedBody = JSON.parse(opts.body);
+		return { ok: true, text: async () => "" };
+	};
+	try {
+		const cfg = { url: "http://localhost:4319", environment: "test", serviceName: "test" };
+		const server = buildTrailServer(cfg, undefined);
+		const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+		const client = new Client({ name: "test-client", version: "1.0.0" });
+		await Promise.all([client.connect(clientTransport), server.connect(serverTransport)]);
+
+		const startResult = await client.callTool({ name: "trail_start_run", arguments: { name: "test run" } });
+		const runId = startResult.content[0].text.match(/run_id=(\w+)/)[1];
+		await client.callTool({ name: "trail_finish_run", arguments: { run_id: runId, status: "ok" } });
+
+		const span = capturedBody.resourceSpans[0].scopeSpans[0].spans[0];
+		return Object.fromEntries(span.attributes.map((a) => [a.key, a.value]));
+	} finally {
+		global.fetch = originalFetch;
+	}
+}
 
 describe("buildStepSpan", () => {
 	test("sets gen_ai.tool.name and JSON-encodes string prompt/completion events for a successful tool step", () => {
@@ -177,5 +208,30 @@ describe("buildStepSpan — diffs", () => {
 		const withField = buildStepSpan(RUN, "s1", "1000", "2000", { ...base, diffs: undefined });
 		const without = buildStepSpan(RUN, "s1", "1000", "2000", base);
 		assert.deepEqual(withField, without);
+	});
+});
+
+describe("trail_finish_run — session id", () => {
+	test("includes gen_ai.harness.session_id when CLAUDE_CODE_SESSION_ID is set", async () => {
+		const original = process.env.CLAUDE_CODE_SESSION_ID;
+		process.env.CLAUDE_CODE_SESSION_ID = "0f962b5d-b5f1-42e0-a294-03819bc6eb8d";
+		try {
+			const attrs = await finishRunAndCaptureSpanAttributes();
+			assert.equal(attrs["gen_ai.harness.session_id"]?.stringValue, "0f962b5d-b5f1-42e0-a294-03819bc6eb8d");
+		} finally {
+			if (original === undefined) delete process.env.CLAUDE_CODE_SESSION_ID;
+			else process.env.CLAUDE_CODE_SESSION_ID = original;
+		}
+	});
+
+	test("omits gen_ai.harness.session_id when CLAUDE_CODE_SESSION_ID is unset", async () => {
+		const original = process.env.CLAUDE_CODE_SESSION_ID;
+		delete process.env.CLAUDE_CODE_SESSION_ID;
+		try {
+			const attrs = await finishRunAndCaptureSpanAttributes();
+			assert.equal("gen_ai.harness.session_id" in attrs, false);
+		} finally {
+			if (original !== undefined) process.env.CLAUDE_CODE_SESSION_ID = original;
+		}
 	});
 });
