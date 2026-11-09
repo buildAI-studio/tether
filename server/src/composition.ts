@@ -110,7 +110,7 @@ export function listCompositionOnlySessions(db: Database.Database, limit: number
 			traceId: row.traceId,
 			sessionId: view.entries[0].sessionId,
 			entryCount: view.entries.length,
-			lastActivityAt: toIsoOrEmpty(lastNs ?? 0n),
+			lastActivityAt: lastNs !== null ? toIsoOrEmpty(lastNs) : "",
 		});
 	}
 

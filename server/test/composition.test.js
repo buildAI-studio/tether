@@ -110,4 +110,14 @@ describe("listCompositionOnlySessions", () => {
 		const sessions = listCompositionOnlySessions(db, 50);
 		assert.deepEqual(sessions.map((s) => s.traceId), ["new", "old"]);
 	});
+
+	test("a malformed startTimeUnixNano degrades lastActivityAt instead of throwing", () => {
+		const db = openDatabase(":memory:");
+		const span = attachmentSpan("t6", "s1", "parent-placeholder");
+		span.startTimeUnixNano = "not-a-number";
+		insertSpan(db, span);
+		const sessions = listCompositionOnlySessions(db, 50);
+		assert.equal(sessions.length, 1);
+		assert.equal(sessions[0].lastActivityAt, "");
+	});
 });
