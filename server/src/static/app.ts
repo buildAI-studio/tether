@@ -7,6 +7,25 @@
 
 type RunData = import("../runs.js").RunView & { coverage: import("../coverage.js").CoverageView | null };
 
+// Mirrors server/src/composition.ts's CompositionEntry -- deliberately redeclared rather than
+// imported (same convention RunData above follows for RunView/CoverageView): this file compiles
+// to a classic, non-module browser script (see the top-of-file note), so it can't pull in a
+// server-only module's value exports without becoming one itself.
+interface CompositionEntry {
+	source: string;
+	kind: string;
+	nameOrPath: string;
+	sizeBytes: number;
+	contentPreview?: string;
+	sessionId: string;
+	timestamp: string;
+}
+
+interface CompositionData {
+	traceId: string;
+	entries: CompositionEntry[];
+}
+
 function $<T extends HTMLElement = HTMLElement>(id: string): T {
 	const el = document.getElementById(id);
 	if (!el) throw new Error(`missing #${id}`);
@@ -752,6 +771,70 @@ function mountRunDataIfPresent(): string | null {
 	return runData.traceId;
 }
 
+function fmtTimestamp(ts: string): string {
+	if (!ts) return "unknown time";
+	const d = new Date(ts);
+	return Number.isNaN(d.getTime()) ? "unknown time" : d.toLocaleString();
+}
+
+/**
+ * One attached entry (file read, skill/sub-agent/MCP-server discovery, injected context, ...)
+ * as a small card. `nameOrPath`, `source`, `sessionId`, and `contentPreview` are all
+ * attacker/agent-controlled (same trust level as everything else rendered in this file, per
+ * escapeHtml's existing uses above) -- every one of them goes through escapeHtml. A
+ * `hook_injected_context` entry typically has no meaningful nameOrPath, so that (and any other
+ * kind with an empty one) falls back to a placeholder rather than rendering blank.
+ * contentPreview can be up to ~16KB (the server's sanitize cap) -- wrapped in a closed
+ * `<details>` (same collapsible pattern renderMessages above already uses for message bodies)
+ * so a page with many preview-heavy entries doesn't render megabytes of visible text at once;
+ * .io-block's existing overflow-x/pre-wrap styling keeps even a single huge line from blowing
+ * out the layout once expanded.
+ */
+function renderCompositionEntry(e: CompositionEntry): string {
+	const label = e.nameOrPath || (e.kind === "hook_injected_context" ? "(injected context)" : "(unnamed)");
+	const sessionLabel = e.sessionId ? escapeHtml(e.sessionId) : "no session id";
+	const metaBits = [escapeHtml(e.source || "unknown source"), fmtTimestamp(e.timestamp), "session " + sessionLabel];
+	if (e.sizeBytes) metaBits.push(fmtBytes(e.sizeBytes));
+	const preview = e.contentPreview
+		? '<details class="msg-row"><summary class="msg-role">Preview (' + fmtBytes(e.contentPreview.length) + ")</summary>"
+			+ '<div class="io-block">' + escapeHtml(e.contentPreview) + "</div></details>"
+		: "";
+	return '<div class="insp-section">'
+		+ '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">'
+		+ '<span class="stat-chip" style="color:var(--ink-3);background:var(--panel-2)">' + escapeHtml(e.kind) + "</span>"
+		+ "<strong>" + escapeHtml(label) + "</strong>"
+		+ "</div>"
+		+ '<div class="io-kind" style="margin-top:6px;text-transform:none;letter-spacing:normal">' + metaBits.join(" · ") + "</div>"
+		+ preview
+		+ "</div>";
+}
+
+function renderCompositionEntries(entries: CompositionEntry[]): string {
+	if (!entries.length) return '<div class="insp-empty">No composition data for this session.</div>';
+	return entries.map(renderCompositionEntry).join("");
+}
+
+/** Mounts the embedded #composition-data island if present, returning the traceId it mounted --
+ * or null if there was none. navigateTo tries mountRunDataIfPresent first (a fragment only ever
+ * carries one island or the other, see composition-detail.ts/flight-recorder.ts), so this only
+ * ever does anything on the composition-only ("no completed run, crashed/background session")
+ * fragment from Task 3. Unlike mountDetailPanel, this view has no timers/listeners of its own,
+ * so it doesn't set currentUnmount -- the caller's existing `if (currentUnmount) { ... }` guard
+ * already cleans up whatever the *previous* panel left behind. */
+function mountCompositionDataIfPresent(): string | null {
+	const dataEl = document.getElementById("composition-data");
+	if (!dataEl) return null;
+	const data = JSON.parse(dataEl.textContent || "null") as CompositionData | null;
+	if (!data) return null;
+	const count = data.entries.length;
+	const label = count + " item" + (count === 1 ? "" : "s");
+	$("composition-mission").textContent = `Session ${data.traceId} — no completed run, ${label} attached`;
+	$("compositionCount").textContent = label;
+	$("compositionEntries").innerHTML = renderCompositionEntries(data.entries);
+	document.title = `Tether — Composition (${label})`;
+	return data.traceId;
+}
+
 function renderRetry(retry: () => void): void {
 	const content = $("content");
 	content.innerHTML = `<p class="empty">Couldn't load this view. <button id="retryNav" type="button">Retry</button></p>`;
@@ -798,7 +881,7 @@ async function navigateTo(pathname: string, push: boolean): Promise<void> {
 	if (status === 404) {
 		document.title = "Tether — Run not found";
 	} else if (target.view === "detail") {
-		resolvedTraceId = mountRunDataIfPresent() ?? target.traceId;
+		resolvedTraceId = mountRunDataIfPresent() ?? mountCompositionDataIfPresent() ?? target.traceId;
 	} else if (target.view === "harness") {
 		document.title = "Tether — Harness";
 	} else {
@@ -858,7 +941,11 @@ function init(): void {
 		document.getElementById(PLUGIN_PICKER_IDS[slot])?.addEventListener("change", () => onPluginPickerChange(slot));
 	});
 
-	if (currentState.view === "detail") mountRunDataIfPresent();
+	// Same fallback order as navigateTo's detail branch: a server-rendered full-page load of a
+	// composition-only session's URL (direct nav, refresh, bookmark) embeds #composition-data
+	// instead of #run-data, and needs the same client-side mount to actually show its entries --
+	// this is the one hydration path navigateTo's fetch-based branch never runs for.
+	if (currentState.view === "detail") mountRunDataIfPresent() ?? mountCompositionDataIfPresent();
 	if (currentState.view === "analytics") void initWidgetDashboard();
 	setPluginPickerVisibility(currentState.view);
 }
