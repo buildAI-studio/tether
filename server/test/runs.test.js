@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { openDatabase, insertSpan } from "../dist/db.js";
-import { getRun, listRuns, getAllTraceIds } from "../dist/runs.js";
+import { getRun, listRuns, getAllTraceIds, listLinkedSessionIds } from "../dist/runs.js";
 
 function makeTempDbPath() {
 	const dir = mkdtempSync(join(tmpdir(), "tether-runs-test-"));
@@ -29,6 +29,18 @@ function rootSpan({ traceId, spanId, goal, agent, startNs, endNs, verdict, score
 	}
 	const raw = { traceId, spanId, name: goal, startTimeUnixNano: startNs, endTimeUnixNano: endNs, attributes: otlpAttrs(attrs), events: [], status: { code: 1 } };
 	return { traceId, spanId, parentSpanId: null, name: goal, startTimeUnixNano: startNs, endTimeUnixNano: endNs, raw: JSON.stringify(raw) };
+}
+
+// Mirrors rootSpan's shape but takes an arbitrary attribute bag directly, for tests that only
+// care about one extra root-span attribute (e.g. gen_ai.harness.session_id) rather than the
+// goal/agent/verdict fields rootSpan hardcodes.
+function rootSpanWithAttrs(traceId, extraAttrs) {
+	const spanId = "root-" + traceId;
+	const startNs = "1000000000000";
+	const endNs = "1001000000000";
+	const attrs = { "gen_ai.agent.goal": "g", "gen_ai.agent.name": "a", ...extraAttrs };
+	const raw = { traceId, spanId, name: "g", startTimeUnixNano: startNs, endTimeUnixNano: endNs, attributes: otlpAttrs(attrs), events: [], status: { code: 1 } };
+	return { traceId, spanId, parentSpanId: null, name: "g", startTimeUnixNano: startNs, endTimeUnixNano: endNs, raw: JSON.stringify(raw) };
 }
 
 function stepSpan({ traceId, spanId, parentSpanId, name, startNs, endNs, toolName, isError, prompt, completion, cost, tokens }) {
@@ -674,6 +686,43 @@ describe("listRuns", () => {
 			db.close();
 			rmSync(join(dbPath, ".."), { recursive: true, force: true });
 		}
+	});
+});
+
+describe("sessionId on RunView/RunSummary", () => {
+	test("getRun surfaces the session id from the root span's attribute", () => {
+		const db = openDatabase(":memory:");
+		insertSpan(db, rootSpanWithAttrs("t1", { "gen_ai.harness.session_id": "sess-123" }));
+		assert.equal(getRun(db, "t1").sessionId, "sess-123");
+	});
+
+	test("getRun returns null sessionId when the attribute is absent", () => {
+		const db = openDatabase(":memory:");
+		insertSpan(db, rootSpanWithAttrs("t2", {}));
+		assert.equal(getRun(db, "t2").sessionId, null);
+	});
+
+	test("listRuns surfaces sessionId the same way", () => {
+		const db = openDatabase(":memory:");
+		insertSpan(db, rootSpanWithAttrs("t3", { "gen_ai.harness.session_id": "sess-456" }));
+		assert.equal(listRuns(db, 50)[0].sessionId, "sess-456");
+	});
+});
+
+describe("listLinkedSessionIds", () => {
+	test("collects session ids from every root span", () => {
+		const db = openDatabase(":memory:");
+		insertSpan(db, rootSpanWithAttrs("t4", { "gen_ai.harness.session_id": "sess-a" }));
+		insertSpan(db, rootSpanWithAttrs("t5", { "gen_ai.harness.session_id": "sess-b" }));
+		const ids = listLinkedSessionIds(db);
+		assert.ok(ids.has("sess-a") && ids.has("sess-b"));
+		assert.equal(ids.size, 2);
+	});
+
+	test("skips root spans with no session id attribute", () => {
+		const db = openDatabase(":memory:");
+		insertSpan(db, rootSpanWithAttrs("t6", {}));
+		assert.equal(listLinkedSessionIds(db).size, 0);
 	});
 });
 

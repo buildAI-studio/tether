@@ -61,6 +61,7 @@ export interface RunView {
 	narrative: string | null;
 	totals: { dur: string; cost: number | null; tokens: number | null; steps: number };
 	steps: StepView[];
+	sessionId: string | null;
 }
 
 export interface RunSummary {
@@ -69,6 +70,7 @@ export interface RunSummary {
 	verdict: Verdict;
 	dur: string;
 	startedAt: string;
+	sessionId: string | null;
 }
 
 interface StoredRow {
@@ -317,6 +319,7 @@ export function getRun(db: Database.Database, traceId: string): RunView | null {
 		narrative,
 		totals: { dur: formatDuration(rootRow.startTimeUnixNano, rootRow.endTimeUnixNano), cost: totalCost, tokens: totalTokens, steps: steps.length },
 		steps,
+		sessionId: asString(root.attrs["gen_ai.harness.session_id"]) ?? null,
 	};
 }
 
@@ -339,6 +342,7 @@ export function listRuns(db: Database.Database, limit: number): RunSummary[] {
 			verdict: asVerdict(parsed.attrs["gen_ai.agent.verdict"]),
 			dur: formatDuration(row.startTimeUnixNano, row.endTimeUnixNano),
 			startedAt: toIsoOrEmpty(startNs),
+			sessionId: asString(parsed.attrs["gen_ai.harness.session_id"]) ?? null,
 		});
 	}
 	return summaries;
@@ -348,4 +352,20 @@ export function listRuns(db: Database.Database, limit: number): RunSummary[] {
 export function getAllTraceIds(db: Database.Database): string[] {
 	const rows = db.prepare("SELECT traceId FROM spans WHERE parentSpanId IS NULL").all() as { traceId: string }[];
 	return rows.map((r) => r.traceId);
+}
+
+/** Every session id already linked to a run, collected from each root span's gen_ai.harness.session_id
+ * attribute. A root span whose raw payload fails to parse, or that carries no (or a non-string/empty)
+ * session id, is skipped rather than throwing. Used to exclude already-linked sessions from a
+ * composition-only list elsewhere in the UI. */
+export function listLinkedSessionIds(db: Database.Database): Set<string> {
+	const rows = db.prepare("SELECT raw FROM spans WHERE parentSpanId IS NULL").all() as { raw: string }[];
+	const ids = new Set<string>();
+	for (const row of rows) {
+		const parsed = parseRaw(row.raw);
+		if (!parsed) continue;
+		const sessionId = asString(parsed.attrs["gen_ai.harness.session_id"]);
+		if (sessionId) ids.add(sessionId);
+	}
+	return ids;
 }
