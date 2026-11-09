@@ -2,7 +2,7 @@ import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import { openDatabase, insertSpan } from "../dist/db.js";
 import { listRuns } from "../dist/runs.js";
-import { getCompositionView } from "../dist/composition.js";
+import { getCompositionView, listCompositionOnlySessions } from "../dist/composition.js";
 
 function attachmentSpan(traceId, spanId, parentSpanId, overrides = {}) {
 	const attrs = {
@@ -70,5 +70,44 @@ describe("getCompositionView", () => {
 		const view = getCompositionView(db, "t5");
 		assert.equal(view.entries.length, 1);
 		assert.equal(view.entries[0].timestamp, "");
+	});
+});
+
+describe("listCompositionOnlySessions", () => {
+	test("lists a composition-only trace, not a run", () => {
+		const db = openDatabase(":memory:");
+		insertSpan(db, attachmentSpan("t1", "s1", "parent-placeholder", { "gen_ai.harness.attachment.session_id": "sess-abc" }));
+		const sessions = listCompositionOnlySessions(db, 50);
+		assert.equal(sessions.length, 1);
+		assert.equal(sessions[0].traceId, "t1");
+		assert.equal(sessions[0].sessionId, "sess-abc");
+		assert.equal(sessions[0].entryCount, 1);
+	});
+
+	test("excludes a trace that has a real run (root span)", () => {
+		const db = openDatabase(":memory:");
+		insertSpan(db, { traceId: "run1", spanId: "root", parentSpanId: null, name: "run",
+			startTimeUnixNano: "1700000000000000000", endTimeUnixNano: "1700000000000000000",
+			raw: JSON.stringify({ attributes: [], status: { code: 1 } }) });
+		insertSpan(db, attachmentSpan("run1", "s1", "root")); // same traceId as the run, hypothetically
+		const sessions = listCompositionOnlySessions(db, 50);
+		assert.equal(sessions.length, 0);
+	});
+
+	test("excludes a trace with spans but no attachment data (a crashed self-reported run)", () => {
+		const db = openDatabase(":memory:");
+		insertSpan(db, { traceId: "t2", spanId: "s1", parentSpanId: "some-nonexistent-root",
+			startTimeUnixNano: "1700000000000000000", endTimeUnixNano: "1700000000000000000", name: "step",
+			raw: JSON.stringify({ attributes: [{ key: "gen_ai.harness.source_type", value: { stringValue: "skill" } }], status: { code: 1 } }) });
+		const sessions = listCompositionOnlySessions(db, 50);
+		assert.equal(sessions.length, 0);
+	});
+
+	test("orders by most recent activity, descending", () => {
+		const db = openDatabase(":memory:");
+		insertSpan(db, { ...attachmentSpan("old", "s1", "p1"), startTimeUnixNano: "1600000000000000000" });
+		insertSpan(db, { ...attachmentSpan("new", "s1", "p1"), startTimeUnixNano: "1700000000000000000" });
+		const sessions = listCompositionOnlySessions(db, 50);
+		assert.deepEqual(sessions.map((s) => s.traceId), ["new", "old"]);
 	});
 });

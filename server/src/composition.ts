@@ -73,3 +73,46 @@ export function getCompositionView(db: Database.Database, traceId: string): Comp
 
 	return { entries };
 }
+
+export interface CompositionSessionSummary {
+	traceId: string;
+	sessionId: string;
+	entryCount: number;
+	lastActivityAt: string;
+}
+
+interface CandidateRow {
+	traceId: string;
+	lastNs: string;
+}
+
+/**
+ * Finds traces that have composition data but never got a root span -- i.e. sessions that
+ * crashed or are still running under `trail_attach` with no corresponding `trail_finish_run`.
+ * A crashed *self-reported* run (real step data under gen_ai.harness.source_type, also
+ * rootless) is excluded too: it has no attachment attributes, so getCompositionView returns
+ * `{ entries: [] }` for it and this function skips it below.
+ */
+export function listCompositionOnlySessions(db: Database.Database, limit: number): CompositionSessionSummary[] {
+	const candidates = db
+		.prepare(
+			"SELECT traceId, MAX(startTimeUnixNano) as lastNs FROM spans WHERE traceId NOT IN (SELECT traceId FROM spans WHERE parentSpanId IS NULL) GROUP BY traceId ORDER BY lastNs DESC LIMIT ?",
+		)
+		.all(limit) as CandidateRow[];
+
+	const summaries: CompositionSessionSummary[] = [];
+	for (const row of candidates) {
+		const view = getCompositionView(db, row.traceId);
+		if (!view || view.entries.length === 0) continue; // no attachment data -- a crashed self-reported run, or no data at all
+
+		const lastNs = toNs(row.lastNs);
+		summaries.push({
+			traceId: row.traceId,
+			sessionId: view.entries[0].sessionId,
+			entryCount: view.entries.length,
+			lastActivityAt: toIsoOrEmpty(lastNs ?? 0n),
+		});
+	}
+
+	return summaries;
+}
