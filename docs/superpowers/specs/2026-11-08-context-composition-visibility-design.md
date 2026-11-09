@@ -455,6 +455,87 @@ This keeps the plugin system's three slots exactly as they are, costs no
 new top-level route, and directly fixes the rail-discoverability gap
 flagged (and deferred) in every prior plan in this series.
 
+## §7: Linking a run to its session (resolved 2026-11-09)
+
+§6 shipped, and its final review surfaced the real consequence flagged in
+"Implementation status" below: composition hooks fire on *every* session,
+not just crashed/background ones, so an ordinary session that completes a
+normal run also produces a second, separate composition-only rail row for
+the same work — not a bug, but the two `traceId` spaces (a run's random
+`hexId(16)` vs. a composition span's session-derived id) never had
+anything connecting them. This section resolves that by actually making
+the connection, rather than just wording around it.
+
+**The missing fact, confirmed empirically rather than assumed:** the MCP
+server process (`trailai-mcp`, running inside whatever harness spawned it)
+has `process.env.CLAUDE_CODE_SESSION_ID` available — confirmed by reading
+this very session's own process environment (version 2.1.311), where it
+holds exactly the session id already seen throughout this whole project's
+transcripts and hook payloads. This is **not** drawn from Claude Code's
+public hooks documentation (that spike was specifically about hook stdin
+JSON, a different mechanism) — it's an empirical finding about this one
+installation's environment, not a documented contract. Treat it the same
+way as every other best-effort signal in this design: read it if present,
+degrade to "no link" if absent (an older Claude Code version, a different
+harness like Cursor/Windsurf, or a future version that stops setting it) —
+never a hard dependency.
+
+**Resolved design:**
+
+1. **`mcp/`**: `trail_finish_run`'s root-span attributes (`mcp/src/
+   tools.ts`) gain `"gen_ai.harness.session_id": process.env
+   .CLAUDE_CODE_SESSION_ID` — same `gen_ai.harness.*` namespace as the
+   existing `source_type`/`source_name` step attributes, just at the
+   run level. `otlp.ts`'s `toAttributes` already drops `undefined`
+   values, so an unset env var means the attribute is simply absent —
+   no special-casing needed, no behavior change for a harness that
+   never sets it. Version bump: `mcp` 0.6.0 → 0.7.0.
+2. **`server/src/runs.ts`**: `RunView` and `RunSummary` both gain
+   `sessionId: string | null`, read the same defensive way every other
+   attribute here is (`asString(root.attrs["gen_ai.harness.session_id"])
+   ?? null`). A new `listLinkedSessionIds(db): Set<string>` scans root
+   spans for this attribute — the set of session ids that already have
+   a run, needed by the exclusion below.
+3. **`server/src/composition.ts`**: a server-side `traceIdFromSessionId`
+   (mirrors `mcp/src/hooks/deliver.ts`'s exactly, duplicated rather than
+   shared across packages — same convention this whole series has
+   already used for small pure functions) plus `getCompositionViewForSessionId
+   (db, sessionId): CompositionView | null`, which derives the
+   traceId and delegates to the already-shipped `getCompositionView`.
+   `listCompositionOnlySessions` gains a `linkedSessionIds: Set<string>`
+   parameter (a deliberate signature change, like §6's `renderRailBody`
+   change) and skips any candidate whose `sessionId` is in that set —
+   this is what actually removes the duplicate row, at the source,
+   rather than hiding it client-side.
+4. **Detail view, nested like Coverage already is** — not just
+   deduplication. Hiding the second row without surfacing that data
+   elsewhere would be a real regression: a successful run's own session
+   might have genuinely useful silently-injected context, and §6 already
+   made that visible once. `server/src/templates/flight-recorder.ts`'s
+   `renderDetailFragment` gains a third parameter, `composition:
+   CompositionView | null`, embedded into the same `#run-data` JSON
+   island (`{...run, coverage, composition}`) rather than a second
+   island. The skeleton gains an "Attached" section using the *same*
+   element ids `composition-detail.ts` already uses
+   (`composition-mission`/`compositionCount`/`compositionEntries`) —
+   safe because a page never renders both skeletons at once, so there's
+   no id collision, and it lets the client reuse one rendering function
+   instead of two. Follow the same pattern already established for the
+   existing "Coverage" section (always present in the skeleton,
+   client-side code decides what to show) rather than inventing a new
+   conditional-skeleton mechanism.
+5. **`app.ts`**: the entry-list rendering logic `mountCompositionDataIfPresent`
+   already built becomes a shared helper, called from both
+   `mountCompositionDataIfPresent` (the standalone composition-only case,
+   unchanged) and `mountRunDataIfPresent` (new: renders into the
+   "Attached" section when `runData.composition` is present and non-empty).
+
+**Non-goal:** this does not change anything about how composition data
+without *any* matching run still works — §6's rail-merge, the
+composition-only detail fragment, and the "not linked to a run" copy all
+stay exactly as they are for a genuinely orphaned session. This section
+only removes the *duplicate* for a session that does have a linked run.
+
 ## Implementation status (as of 2026-11-09)
 
 §1's hook capture mechanism shipped — `mcp/src/hooks/{transcript,capture,
