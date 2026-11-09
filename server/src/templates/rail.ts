@@ -43,16 +43,19 @@ function railRow(run: RunSummary, activeTraceId: string | undefined, nowMs: numb
 	</a>`;
 }
 
-/** A session that has composition data (skills/files attached, context silently injected) but
- * never produced a completed run -- the crashed/background-session case that `listCompositionOnlySessions`
- * (composition.ts) surfaces. Renders a "no run" badge instead of a verdict dot, and a `Session
- * <id prefix>` label instead of a goal, so it reads as distinct from -- not a 5th verdict state of
- * -- a normal run row. */
+/** A session the `trailai-mcp` hooks captured composition data for (skills/files attached,
+ * context silently injected) but that isn't linked to any completed run -- composition traceIds
+ * are derived from the Claude Code session id, while a run's traceId is an unrelated random value
+ * (see `mcp/src/hooks/deliver.ts`'s `traceIdFromSessionId`), so this is the common case, not an
+ * error case: it covers every ordinary session alongside crashed/background ones that never
+ * produced a run at all. `listCompositionOnlySessions` (composition.ts) surfaces these. Renders a
+ * badge instead of a verdict dot, and a `Session <id prefix>` label instead of a goal, so it reads
+ * as distinct from -- not a 5th verdict state of -- a normal run row. */
 function compositionRow(session: CompositionSessionSummary, activeTraceId: string | undefined, nowMs: number): string {
 	const activeClass = session.traceId === activeTraceId ? " rail-row-active" : "";
 	const label = session.sessionId ? `Session ${session.sessionId.slice(0, 8)}` : "Unknown session";
 	return `<a class="rail-row rail-row-composition${activeClass}" href="/runs/${escapeHtml(session.traceId)}" data-trace-id="${escapeHtml(session.traceId)}">
-		<span class="rail-dot-goal"><span class="rail-badge-composition" title="No completed run">no run</span><span class="rail-goal">${escapeHtml(label)}</span></span>
+		<span class="rail-dot-goal"><span class="rail-badge-composition" title="Not linked to a run">session</span><span class="rail-goal">${escapeHtml(label)}</span></span>
 		<span class="rail-time">${escapeHtml(formatRelativeTime(session.lastActivityAt, nowMs))}</span>
 	</a>`;
 }

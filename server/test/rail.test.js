@@ -104,7 +104,7 @@ describe("renderRailBody", () => {
 		const html = renderRailBody([compositionEntry()], undefined, Date.now());
 		assert.match(html, /rail-row-composition/);
 		assert.match(html, /rail-badge-composition/);
-		assert.match(html, />no run</);
+		assert.match(html, />session</);
 		// No verdict-dot span at all (rail-dot-goal's wrapper span is fine; it's the inner
 		// `class="rail-dot"` -- the colored circle itself -- that a composition row never emits).
 		assert.doesNotMatch(html, /class="rail-dot"/);

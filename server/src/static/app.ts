@@ -817,9 +817,10 @@ function renderCompositionEntries(entries: CompositionEntry[]): string {
 /** Mounts the embedded #composition-data island if present, returning the traceId it mounted --
  * or null if there was none. navigateTo tries mountRunDataIfPresent first (a fragment only ever
  * carries one island or the other, see composition-detail.ts/flight-recorder.ts), so this only
- * ever does anything on the composition-only ("no completed run, crashed/background session")
- * fragment from Task 3. Unlike mountDetailPanel, this view has no timers/listeners of its own,
- * so it doesn't set currentUnmount -- the caller's existing `if (currentUnmount) { ... }` guard
+ * ever does anything on the composition-only ("not linked to a run" -- includes but isn't limited
+ * to a crashed/background session) fragment from Task 3. Unlike mountDetailPanel, this view has
+ * no timers/listeners of its own, so it doesn't set currentUnmount -- the caller's existing
+ * `if (currentUnmount) { ... }` guard
  * already cleans up whatever the *previous* panel left behind. */
 function mountCompositionDataIfPresent(): string | null {
 	const dataEl = document.getElementById("composition-data");
@@ -828,7 +829,7 @@ function mountCompositionDataIfPresent(): string | null {
 	if (!data) return null;
 	const count = data.entries.length;
 	const label = count + " item" + (count === 1 ? "" : "s");
-	$("composition-mission").textContent = `Session ${data.traceId} — no completed run, ${label} attached`;
+	$("composition-mission").textContent = `Session ${data.traceId} — composition data (not linked to a run), ${label} attached`;
 	$("compositionCount").textContent = label;
 	$("compositionEntries").innerHTML = renderCompositionEntries(data.entries);
 	document.title = `Tether — Composition (${label})`;
