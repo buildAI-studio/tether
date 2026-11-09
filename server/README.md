@@ -35,15 +35,22 @@ claude mcp add trail -- npx -y trailai-mcp
   full page reload. The rail also surfaces composition-only sessions —
   any Claude Code session the `trailai-mcp` hooks captured skills/files/MCP
   server attachments for, marked with a "session" badge and the first 8
-  characters of the session id instead of a goal. This isn't limited to
-  crashed or still-running sessions: a composition session's traceId is
-  derived from the Claude Code session id, while a run's traceId is an
-  unrelated random value assigned by `trail_start_run`, so the two are never
-  linked — an ordinary session whose run completes normally *also* produces
-  one of these rows alongside its run's own row, for the same work. Clicking
-  one opens the same `/runs/:traceId` URL as a normal run, rendering a
-  minimal "Attached" list of what it picked up rather than the full Flight
-  Recorder view (which needs a completed run's root span):
+  characters of the session id instead of a goal. A composition session's
+  traceId is derived from the Claude Code session id, while a run's traceId
+  is an unrelated random value assigned by `trail_start_run`, so the two are
+  never the same row by construction — but when the run's root span carries
+  that session id (via `gen_ai.harness.session_id`, stamped whenever
+  `CLAUDE_CODE_SESSION_ID` is set), the server treats the session as linked:
+  its composition data is looked up and nested into that run's own Detail
+  page (an "Attached" section alongside the Flight Recorder view), and the
+  session is excluded from the rail entirely rather than appearing a second
+  time as its own row. The "session" badge / "Not linked to a run" label
+  now only ever shows up for a session that genuinely has no completed run
+  — a crashed or still-running session, or one whose root span never got a
+  session id. Clicking a genuinely orphaned composition-only row opens the
+  same `/runs/:traceId` URL as a normal run, rendering a minimal "Attached"
+  list of what it picked up rather than the full Flight Recorder view
+  (which needs a completed run's root span):
   - **Detail** (`/runs/:traceId`, or `/` for the most recent run) — the
     Flight Recorder view: goal, verdict, a scrubbable step timeline with
     play/pause/speed controls, per-step expansion showing raw

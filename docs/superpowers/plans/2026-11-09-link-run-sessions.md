@@ -427,14 +427,16 @@ git commit -m "feat(server): exclude linked composition sessions from the rail, 
 
 **Interfaces:**
 - Consumes: `renderCompositionEntries` (already exists in this file, exported-within-file — just call it).
-- Produces: `RunData`'s type gains `composition: CompositionEntry[] | null`; `mountDetailPanel` gains a `renderComposition()` function mirroring `renderCoverage()`'s exact pattern.
+- Produces: `RunData`'s type gains `composition: import("../composition.js").CompositionView | null`; `mountDetailPanel` gains a `renderComposition()` function mirroring `renderCoverage()`'s exact pattern.
 
-Change `RunData`'s type declaration (currently `type RunData = import("../runs.js").RunView & { coverage: ... | null };`) to also include `composition: CompositionEntry[] | null` — note this is a flat array of entries (matching `CompositionView["entries"]`'s shape), not the `CompositionData` wrapper type (`{traceId, entries}`) that the standalone composition-only page uses, since `RunData` already has its own `traceId` from `RunView`.
+**Correction (found during Task 6's implementation, confirmed by task review against live source):** this task's original text below said `composition: CompositionEntry[] | null` (a flat array). That's wrong — `renderDetailFragment` (Task 4/5, already shipped) embeds the full `CompositionView` object (`{entries: CompositionEntry[]}`), not a bare array; `server/test/server.test.js`'s already-passing assertion (`json.composition.entries.length`) confirms this is the real, shipped wire format. Type `RunData.composition` as `import("../composition.js").CompositionView | null` and unwrap `.entries` inside `renderComposition()`, not as a flat array.
+
+Change `RunData`'s type declaration (currently `type RunData = import("../runs.js").RunView & { coverage: ... | null };`) to also include `composition: import("../composition.js").CompositionView | null`.
 
 Inside `mountDetailPanel`, add a `renderComposition()` function immediately after `renderCoverage()`, following its exact structure:
 ```ts
 function renderComposition(): void {
-	const entries = runData.composition, el = $("compositionEntries");
+	const entries = runData.composition?.entries, el = $("compositionEntries");
 	el.innerHTML = renderCompositionEntries(entries ?? []);
 }
 ```
