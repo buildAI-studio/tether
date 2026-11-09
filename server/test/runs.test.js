@@ -724,6 +724,16 @@ describe("listLinkedSessionIds", () => {
 		insertSpan(db, rootSpanWithAttrs("t6", {}));
 		assert.equal(listLinkedSessionIds(db).size, 0);
 	});
+
+	test("skips a root span whose raw payload isn't valid JSON, rather than throwing", () => {
+		const db = openDatabase(":memory:");
+		insertSpan(db, { traceId: "t7", spanId: "root-t7", parentSpanId: null, name: "g", startTimeUnixNano: "1000000000000", endTimeUnixNano: "1001000000000", raw: "not json" });
+		insertSpan(db, rootSpanWithAttrs("t8", { "gen_ai.harness.session_id": "sess-c" }));
+		let ids;
+		assert.doesNotThrow(() => { ids = listLinkedSessionIds(db); });
+		assert.equal(ids.size, 1);
+		assert.ok(ids.has("sess-c"));
+	});
 });
 
 describe("getAllTraceIds", () => {
