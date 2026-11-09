@@ -1,5 +1,6 @@
 import type { RunView } from "../runs.js";
 import type { CoverageView } from "../coverage.js";
+import type { CompositionView } from "../composition.js";
 
 /**
  * The Detail panel's static DOM skeleton -- element ids match exactly what
@@ -55,6 +56,11 @@ const SKELETON = `
 	<div class="panel-head"><h2>Coverage</h2></div>
 	<div class="insp" id="coverage"></div>
 </section>
+
+<section class="panel">
+	<div class="panel-head"><h2>Attached</h2></div>
+	<div class="insp" id="compositionEntries"></div>
+</section>
 `;
 
 /**
@@ -66,10 +72,12 @@ const SKELETON = `
  * tag's type attribute. The old U+2028/U+2029 line-terminator escaping is dropped: it only mattered
  * when this JSON was substituted directly into JS source (`const RUN = ...`) and eval'd; both
  * characters are valid inside a JSON string and inside a <script> tag's text content, so
- * JSON.parse(textContent) needs no help with them.
+ * JSON.parse(textContent) needs no help with them. `composition` is non-null only when the run's
+ * session is linked to one (see composition.ts's getCompositionViewForSessionId) -- the "Attached"
+ * section above renders from it, same island, same escaping, no separate script tag.
  */
-export function renderDetailFragment(run: RunView, coverage: CoverageView | null): string {
-	const json = JSON.stringify({ ...run, coverage }).replace(/</g, "\\u003c");
+export function renderDetailFragment(run: RunView, coverage: CoverageView | null, composition: CompositionView | null): string {
+	const json = JSON.stringify({ ...run, coverage, composition }).replace(/</g, "\\u003c");
 	return `${SKELETON}
 <script type="application/json" id="run-data">${json}</script>`;
 }

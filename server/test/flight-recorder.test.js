@@ -72,6 +72,20 @@ describe("renderDetailFragment", () => {
 	});
 });
 
+describe("renderDetailFragment with composition data", () => {
+	test("embeds the composition field in the run-data island", () => {
+		const composition = { entries: [{ source: "pre_tool_use_hook", kind: "tool_file", nameOrPath: "/a.ts", sizeBytes: 5, sessionId: "sess-1", timestamp: "2026-11-09T00:00:00.000Z" }] };
+		const html = renderDetailFragment(makeRunView({ sessionId: "sess-1" }), null, composition);
+		assert.deepEqual(extractRunData(html).composition, composition);
+	});
+
+	test("includes the Attached section markup even when composition is null", () => {
+		const html = renderDetailFragment(makeRunView({ sessionId: null }), null, null);
+		assert.match(html, /id="compositionEntries"/);
+		assert.equal(extractRunData(html).composition, null);
+	});
+});
+
 describe("renderEmptyDetailPanel", () => {
 	test("shows an honest empty-state message", () => {
 		assert.match(renderEmptyDetailPanel(), /No runs yet/);
