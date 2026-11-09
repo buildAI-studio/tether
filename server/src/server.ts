@@ -16,6 +16,7 @@ import { getCompositionView, listCompositionOnlySessions } from "./composition.j
 import { getCoverage } from "./coverage.js";
 import { getUsage } from "./analytics.js";
 import { renderDetailFragment, renderEmptyDetailPanel } from "./templates/flight-recorder.js";
+import { renderCompositionFragment } from "./templates/composition-detail.js";
 import { renderRailBody } from "./templates/rail.js";
 import type { RailEntry } from "./templates/rail.js";
 import { renderHarnessBody } from "./templates/harness.js";
@@ -104,6 +105,20 @@ function decodeTraceIdOrShellError(
 		res.end(body);
 		return null;
 	}
+}
+
+/** Renders the Detail fragment body for a traceId that has a completed run, falling back to
+ * the composition-only fragment when there's no run but there IS real attachment data for that
+ * traceId (a crashed or still-running `trail_attach` session -- see composition.ts). An empty
+ * `{ entries: [] }` composition view (no root span and no attachment attributes either -- e.g. a
+ * crashed self-reported run) is treated the same as "nothing to show" and still 404s, matching
+ * today's behavior exactly for that case. */
+function renderDetailOrComposition(db: Database.Database, traceId: string): { status: 200 | 404; body: string } {
+	const run = getRun(db, traceId);
+	if (run) return { status: 200, body: renderDetailFragment(run, getCoverage(db, traceId)) };
+	const composition = getCompositionView(db, traceId);
+	if (composition && composition.entries.length > 0) return { status: 200, body: renderCompositionFragment(traceId, composition) };
+	return { status: 404, body: renderNotFoundPanel() };
 }
 
 /** The rail's inner HTML for the 50 most recent runs merged with the 50 most recent
@@ -357,15 +372,9 @@ export function createTetherServer(db: Database.Database, options: { pluginsRoot
 					res.end(body);
 					return;
 				}
-				const run = getRun(db, traceId);
-				if (!run) {
-					res.writeHead(404, { "Content-Type": "text/html; charset=utf-8" });
-					res.end(renderNotFoundPanel());
-					return;
-				}
-				const body = renderDetailFragment(run, getCoverage(db, traceId));
-				res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-				res.end(body);
+				const result = renderDetailOrComposition(db, traceId);
+				res.writeHead(result.status, { "Content-Type": "text/html; charset=utf-8" });
+				res.end(result.body);
 			} catch (err) {
 				sendError(res, 500, (err as Error).message);
 			}
@@ -376,15 +385,9 @@ export function createTetherServer(db: Database.Database, options: { pluginsRoot
 			const traceId = decodeTraceIdOr400(pathname.slice("/fragments/detail/".length), res);
 			if (traceId === null) return;
 			try {
-				const run = getRun(db, traceId);
-				if (!run) {
-					res.writeHead(404, { "Content-Type": "text/html; charset=utf-8" });
-					res.end(renderNotFoundPanel());
-					return;
-				}
-				const body = renderDetailFragment(run, getCoverage(db, traceId));
-				res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-				res.end(body);
+				const result = renderDetailOrComposition(db, traceId);
+				res.writeHead(result.status, { "Content-Type": "text/html; charset=utf-8" });
+				res.end(result.body);
 			} catch (err) {
 				sendError(res, 500, (err as Error).message);
 			}
@@ -632,20 +635,22 @@ export function createTetherServer(db: Database.Database, options: { pluginsRoot
 
 				const run = getRun(db, traceId);
 				const state: ShellState = { view: "detail", traceId };
-				if (!run) {
-					const body = renderShell(state, "Tether — Run not found", rail, renderNotFoundPanel(), pluginsBySlot(pluginsRoot));
-					res.writeHead(404, { "Content-Type": "text/html; charset=utf-8" });
+				if (run) {
+					const body = renderShell(
+						state,
+						`Tether — ${run.goal}`,
+						rail,
+						renderDetailFragment(run, getCoverage(db, traceId)),
+						pluginsBySlot(pluginsRoot)
+					);
+					res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
 					res.end(body);
 					return;
 				}
-				const body = renderShell(
-					state,
-					`Tether — ${run.goal}`,
-					rail,
-					renderDetailFragment(run, getCoverage(db, traceId)),
-					pluginsBySlot(pluginsRoot)
-				);
-				res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+				const result = renderDetailOrComposition(db, traceId);
+				const title = result.status === 404 ? "Tether — Run not found" : "Tether — Composition";
+				const body = renderShell(state, title, rail, result.body, pluginsBySlot(pluginsRoot));
+				res.writeHead(result.status, { "Content-Type": "text/html; charset=utf-8" });
 				res.end(body);
 			} catch (err) {
 				sendError(res, 500, (err as Error).message);

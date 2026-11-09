@@ -384,6 +384,18 @@ describe("GET /runs/:traceId", () => {
 			assert.match(text, /class="shell"/);
 		});
 	});
+
+	test("falls back to a shell-wrapped composition panel when there's no run", async () => {
+		await withServer(async ({ db, port }) => {
+			const traceId = "i".repeat(32);
+			insertSpan(db, compositionAttachmentSpan(traceId, "j".repeat(16)));
+			const res = await fetch(`http://127.0.0.1:${port}/runs/${traceId}`);
+			assert.equal(res.status, 200);
+			const text = await res.text();
+			assert.match(text, /class="shell"/);
+			assert.match(text, /id="composition-data"/);
+		});
+	});
 });
 
 describe("GET /runs/:traceId/harness", () => {
@@ -542,6 +554,40 @@ describe("GET /fragments/detail/:traceId", () => {
 	test("an unknown traceId returns a 404 fragment", async () => {
 		await withServer(async ({ port }) => {
 			const res = await fetch(`http://127.0.0.1:${port}/fragments/detail/${"z".repeat(32)}`);
+			assert.equal(res.status, 404);
+			assert.doesNotMatch(await res.text(), /class="shell"/);
+		});
+	});
+
+	test("falls back to composition data when there's no run", async () => {
+		await withServer(async ({ db, port }) => {
+			const traceId = "e".repeat(32);
+			insertSpan(db, compositionAttachmentSpan(traceId, "f".repeat(16)));
+			const res = await fetch(`http://127.0.0.1:${port}/fragments/detail/${traceId}`);
+			assert.equal(res.status, 200);
+			const text = await res.text();
+			assert.match(text, /id="composition-data"/);
+			assert.doesNotMatch(text, /id="run-data"/);
+		});
+	});
+
+	test("still 404s for a crashed self-reported run (real step data, no root, no attachment data)", async () => {
+		await withServer(async ({ db, port }) => {
+			const traceId = "g".repeat(32);
+			const raw = JSON.stringify({
+				attributes: [{ key: "gen_ai.harness.source_type", value: { stringValue: "skill" } }],
+				status: { code: 1 },
+			});
+			insertSpan(db, {
+				traceId,
+				spanId: "h".repeat(16),
+				parentSpanId: "some-nonexistent-root",
+				name: "step",
+				startTimeUnixNano: "1700000000000000000",
+				endTimeUnixNano: "1700000000000000000",
+				raw,
+			});
+			const res = await fetch(`http://127.0.0.1:${port}/fragments/detail/${traceId}`);
 			assert.equal(res.status, 404);
 			assert.doesNotMatch(await res.text(), /class="shell"/);
 		});

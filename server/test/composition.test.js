@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { openDatabase, insertSpan } from "../dist/db.js";
 import { listRuns } from "../dist/runs.js";
 import { getCompositionView, listCompositionOnlySessions } from "../dist/composition.js";
+import { renderCompositionFragment } from "../dist/templates/composition-detail.js";
 
 function attachmentSpan(traceId, spanId, parentSpanId, overrides = {}) {
 	const attrs = {
@@ -119,5 +120,22 @@ describe("listCompositionOnlySessions", () => {
 		const sessions = listCompositionOnlySessions(db, 50);
 		assert.equal(sessions.length, 1);
 		assert.equal(sessions[0].lastActivityAt, "");
+	});
+});
+
+describe("renderCompositionFragment", () => {
+	test("embeds traceId and entries as a JSON island", () => {
+		const html = renderCompositionFragment("t1", { entries: [{ source: "pre_tool_use_hook", kind: "tool_file", nameOrPath: "/a.ts", sizeBytes: 5, sessionId: "s1", timestamp: "2026-11-09T00:00:00.000Z" }] });
+		assert.match(html, /id="composition-data"/);
+		const json = JSON.parse(html.match(/<script[^>]*id="composition-data"[^>]*>([^<]*)<\/script>/)[1]);
+		assert.equal(json.traceId, "t1");
+		assert.equal(json.entries[0].nameOrPath, "/a.ts");
+	});
+
+	test("escapes a literal </script>-like substring so the JSON island tag isn't ended early", () => {
+		const html = renderCompositionFragment("t2", { entries: [{ source: "pre_tool_use_hook", kind: "tool_file", nameOrPath: "</script><script>alert(1)</script>", sizeBytes: 1, sessionId: "s1", timestamp: "" }] });
+		assert.doesNotMatch(html, /<\/script><script>alert/);
+		const json = JSON.parse(html.match(/<script[^>]*id="composition-data"[^>]*>([^<]*)<\/script>/)[1]);
+		assert.equal(json.entries[0].nameOrPath, "</script><script>alert(1)</script>");
 	});
 });
