@@ -222,6 +222,35 @@ describe("GET /api/v1/runs/:traceId", () => {
 			assert.equal(body.ok, false);
 		});
 	});
+
+	test("includes the run's linked composition data in the JSON response", async () => {
+		await withServer(async ({ port }) => {
+			const sessionId = "0f962b5d-b5f1-42e0-a294-03819bc6eb8d";
+			const compositionTraceId = "0f962b5db5f142e0a29403819bc6eb8d"; // traceIdFromSessionId(sessionId)
+			const runTraceId = "a".repeat(32);
+
+			await fetch(`http://127.0.0.1:${port}/traces`, {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify(
+					runPayload(runTraceId, "b".repeat(16), [{ key: "gen_ai.harness.session_id", value: { stringValue: sessionId } }])
+				),
+			});
+			await fetch(`http://127.0.0.1:${port}/traces`, {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify(compositionAttachmentPayload(compositionTraceId, { sessionId })),
+			});
+
+			const res = await fetch(`http://127.0.0.1:${port}/api/v1/runs/${runTraceId}`);
+			assert.equal(res.status, 200);
+			const body = await res.json();
+			assert.equal(body.sessionId, sessionId);
+			assert.ok(body.composition, "composition field should be present");
+			assert.equal(body.composition.entries.length, 1);
+			assert.equal(body.composition.entries[0].nameOrPath, "/a/b.ts");
+		});
+	});
 });
 
 describe("GET /api/v1/harness/:traceId", () => {

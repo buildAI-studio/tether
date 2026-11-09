@@ -404,8 +404,9 @@ export function createTetherServer(db: Database.Database, options: { pluginsRoot
 					sendError(res, 404, "run not found");
 					return;
 				}
+				const composition = run.sessionId ? getCompositionViewForSessionId(db, run.sessionId) : null;
 				res.writeHead(200, { "Content-Type": "application/json" });
-				res.end(JSON.stringify({ ...run, coverage: getCoverage(db, traceId) }));
+				res.end(JSON.stringify({ ...run, coverage: getCoverage(db, traceId), composition }));
 			} catch (err) {
 				sendError(res, 500, (err as Error).message);
 			}

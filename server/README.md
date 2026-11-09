@@ -129,6 +129,19 @@ prefix (a breaking change would ship as `/api/v2/*`):
   string `io` values; a run logged by 0.3.0+ can have any of those types.
   A plugin reading `io` should handle both.
 
+  The run also carries `sessionId` — the Claude Code session id
+  (`trail_finish_run` reads `process.env.CLAUDE_CODE_SESSION_ID`) the run's
+  root span was tagged with, or `null` when the harness that produced the
+  run didn't set one. When `sessionId` is present, the response also
+  carries `composition`: that session's composition view (same shape
+  `/api/v1/composition/:traceId` returns, looked up by session id rather
+  than by trace id — see that route's entry below), or `null` when there's
+  no `sessionId` or no composition data was ever recorded for it. This is
+  the same linked data the built-in Detail view's "Attached" section
+  renders; a plugin replacing the Detail slot that wants to show it no
+  longer needs to re-derive the session's `traceId` itself and call
+  `/api/v1/composition/:traceId` separately.
+
   Each step also carries `id` (its own span id) and `parentId` (the span it
   reports as its parent). Address a step by `id` rather than by its position
   in `steps` — the array's order is not part of this contract. Every step
