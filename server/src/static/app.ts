@@ -347,7 +347,21 @@ function mountDetailPanel(runData: RunData): () => void {
 		$("inspTitle").textContent = s.title + " · step " + (i + 1);
 		const insp = $("insp");
 		let inner = '<div class="pin-note"><span>&#9670; pinned to step ' + (i + 1) + '</span><button id="unpin">back to verdict</button></div>';
-		if (s.sig) inner += s.sig.map((sg) => '<div class="io-sig"><span style="color:var(--stuck);display:grid;place-items:center">' + svg(SVG_LOOP, 1.9) + '</span><div><span class="st" style="color:var(--stuck)">Retry loop &times;' + sg.count + '</span><div style="color:var(--ink-2);margin-top:2px">' + escapeHtml(sg.detail) + "</div></div></div>").join("");
+		if (s.sig) inner += s.sig.map((sg) => {
+			let block = '<div class="io-sig"><span style="color:var(--stuck);display:grid;place-items:center">' + svg(SVG_LOOP, 1.9) + '</span><div><span class="st" style="color:var(--stuck)">Retry loop &times;' + sg.count + '</span><div style="color:var(--ink-2);margin-top:2px">' + escapeHtml(sg.detail) + "</div></div></div>";
+			if (sg.argsDiff) {
+				block += sg.argsDiff.length
+					? '<div class="argdiff">' + sg.argsDiff.map((d) =>
+						'<div class="argdiff-row"><div class="io-kind">' + escapeHtml(d.key) + '</div>'
+						+ '<div class="argdiff-vals">'
+						+ '<div><div class="io-kind">Before</div><div class="io-json">' + renderJsonNode(d.before) + '</div></div>'
+						+ '<div><div class="io-kind">After</div><div class="io-json">' + renderJsonNode(d.after) + '</div></div>'
+						+ '</div></div>'
+					).join("") + '</div>'
+					: '<div class="insp-empty">Retried with the exact same arguments.</div>';
+			}
+			return block;
+		}).join("");
 		if (s.diffs && s.diffs.length) inner += renderDiffs(s.diffs);
 		if (s.io && s.io.length) inner += s.io.map((p) => renderIoPair(p)).join("");
 		else if (!s.diffs || !s.diffs.length) inner += '<div class="insp-empty">No input/output recorded for this step.</div>';

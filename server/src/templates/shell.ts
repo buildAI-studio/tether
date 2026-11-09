@@ -220,6 +220,10 @@ const STYLE = `
 	.io-sig { display: flex; align-items: flex-start; gap: 9px; border-radius: 9px; padding: 10px 12px; font-size: 12.5px; margin-bottom: 12px; background: var(--panel-2); border: 1px solid var(--line); }
 	.io-sig svg { width: 17px; height: 17px; flex: none; margin-top: 1px; }
 	.io-sig .st { font-weight: 600; }
+	.argdiff { margin-top: 10px; }
+	.argdiff-row { margin-bottom: 10px; }
+	.argdiff-row:last-child { margin-bottom: 0; }
+	.argdiff-vals { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 2px; }
 	.io-json { background: var(--panel-2); border: 1px solid var(--line); border-radius: 9px; padding: 10px 12px; font-family: var(--mono); font-size: 12px; line-height: 1.6; overflow-x: auto; }
 	.io-diff { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; line-height: 1.5; border: 1px solid var(--line); border-radius: 6px; overflow-x: auto; margin: 4px 0 10px; }
 	.io-diff > div { padding: 0 8px; white-space: pre; }

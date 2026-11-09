@@ -42,6 +42,7 @@ class FakeElement {
 		this.dataset = {};
 		this._attrs = {};
 		this.children = [];
+		this._scanned = [];
 		this._listeners = {};
 		this._register = register;
 	}
@@ -51,6 +52,17 @@ class FakeElement {
 		if (scriptMatch && this._register) {
 			this._register(scriptMatch[1]).textContent = scriptMatch[2];
 		}
+		// A fresh regex literal at the call site -- not a shared /g-flagged regex reused via
+		// .exec(), which would carry lastIndex state across calls and silently miss matches on a
+		// later, unrelated innerHTML assignment. Deliberately narrow: matches exactly what
+		// renderSteps() emits today (<div class="step" data-i="N" ...), not a general HTML parser.
+		this._scanned = [];
+		for (const match of v.matchAll(/<div class="step" data-i="(\d+)"/g)) {
+			const child = new FakeElement(null);
+			child.dataset.i = match[1];
+			child._classes = new Set(["step"]);
+			this._scanned.push(child);
+		}
 	}
 	get innerHTML() { return this._innerHTML; }
 	setAttribute(n, v) { this._attrs[n] = v; }
@@ -58,8 +70,16 @@ class FakeElement {
 	addEventListener(type, fn) { (this._listeners[type] ??= []).push(fn); }
 	removeEventListener() {}
 	appendChild(child) { this.children.push(child); child._parent = this; return child; }
-	querySelectorAll() { return []; }
+	// Supports only a single leading-dot class selector, matched against this._scanned -- the
+	// only form production code runs against freshly-rendered innerHTML content (renderSteps()'s
+	// `.step` query). Anything else returns [].
+	querySelectorAll(selector) {
+		if (typeof selector !== "string" || !selector.startsWith(".")) return [];
+		const className = selector.slice(1);
+		return this._scanned.filter((el) => el._classes?.has(className));
+	}
 	querySelector() { return null; }
+	click() { (this._listeners.click ?? []).forEach((fn) => fn()); }
 	remove() { if (this._parent) { this._parent.children = this._parent.children.filter((c) => c !== this); this._parent = null; } }
 	scrollIntoView() {}
 	getBoundingClientRect() { return { left: 0, width: 100 }; }
@@ -954,6 +974,77 @@ describe("renderDiffs", () => {
 		assert.ok(!html.includes("0 of 0 hunks"), "hunk-counting language is nonsensical when there were never any hunks");
 		assert.ok(/truncated/i.test(html), "the banner must still say content was cut");
 		assert.ok(html.includes("4KB") || html.includes("4096"), "the omitted size must still be stated");
+	});
+});
+
+describe("step inspector: pinning via querySelectorAll/click", () => {
+	test("querySelectorAll(\".step\") finds rendered step elements and their click listener is reachable", () => {
+		const { elements, mountDetailPanel } = loadApp();
+		mountDetailPanel(makeRunData({ steps: [
+			{ type: "tool", title: "a", status: "ok", start: 0, dur: 1, cost: null, tok: null, io: [] },
+			{ type: "tool", title: "b", status: "ok", start: 1, dur: 1, cost: null, tok: null, io: [] },
+		] }));
+		const stepEls = elements.steps.querySelectorAll(".step");
+		assert.equal(stepEls.length, 2);
+		stepEls[1].click();
+		assert.match(elements.insp.innerHTML, /step 2/);
+	});
+
+	test("renders a key/before/after row for each changed arg when a pinned step has a non-empty argsDiff", () => {
+		const { elements, mountDetailPanel } = loadApp();
+		mountDetailPanel(makeRunData({ steps: [
+			{ type: "tool", title: "edit_file", status: "err", start: 0, dur: 1, cost: null, tok: null, io: [],
+				sig: [{ kind: "retry", count: 2, detail: "Attempt 2", argsDiff: [{ key: "text", before: "x", after: "y" }] }] },
+		] }));
+		elements.steps.querySelectorAll(".step")[0].click();
+		assert.match(elements.insp.innerHTML, /argdiff-row/);
+		assert.match(elements.insp.innerHTML, />text</);
+		assert.match(elements.insp.innerHTML, />Before</);
+		assert.match(elements.insp.innerHTML, />After</);
+	});
+
+	test("renders the identical-arguments message when a pinned step has an empty argsDiff", () => {
+		const { elements, mountDetailPanel } = loadApp();
+		mountDetailPanel(makeRunData({ steps: [
+			{ type: "tool", title: "edit_file", status: "err", start: 0, dur: 1, cost: null, tok: null, io: [],
+				sig: [{ kind: "retry", count: 2, detail: "Attempt 2", argsDiff: [] }] },
+		] }));
+		elements.steps.querySelectorAll(".step")[0].click();
+		assert.match(elements.insp.innerHTML, /Retried with the exact same arguments\./);
+		assert.doesNotMatch(elements.insp.innerHTML, /argdiff-row/);
+	});
+
+	test("renders no argsDiff block when a pinned step's signal has no argsDiff field", () => {
+		const { elements, mountDetailPanel } = loadApp();
+		mountDetailPanel(makeRunData({ steps: [
+			{ type: "tool", title: "run tests", status: "err", start: 0, dur: 1, cost: null, tok: null, io: [],
+				sig: [{ kind: "retry", count: 2, detail: "Attempt 2" }] },
+		] }));
+		elements.steps.querySelectorAll(".step")[0].click();
+		assert.doesNotMatch(elements.insp.innerHTML, /argdiff/);
+		assert.doesNotMatch(elements.insp.innerHTML, /Retried with the exact same arguments\./);
+	});
+
+	test("escapes an argsDiff key and value that contain HTML-special characters", () => {
+		const { elements, mountDetailPanel } = loadApp();
+		mountDetailPanel(makeRunData({ steps: [
+			{ type: "tool", title: "edit_file", status: "err", start: 0, dur: 1, cost: null, tok: null, io: [],
+				sig: [{ kind: "retry", count: 2, detail: "Attempt 2", argsDiff: [{ key: "<script>", before: "</div>", after: "ok" }] }] },
+		] }));
+		elements.steps.querySelectorAll(".step")[0].click();
+		assert.doesNotMatch(elements.insp.innerHTML, /<script>/);
+		assert.match(elements.insp.innerHTML, /&lt;script&gt;/);
+	});
+
+	test("renders a nested object's before/after values via the JSON tree renderer without crashing", () => {
+		const { elements, mountDetailPanel } = loadApp();
+		mountDetailPanel(makeRunData({ steps: [
+			{ type: "tool", title: "call", status: "err", start: 0, dur: 1, cost: null, tok: null, io: [],
+				sig: [{ kind: "retry", count: 2, detail: "Attempt 2", argsDiff: [{ key: "opts", before: { retries: 1 }, after: { retries: 2 } }] }] },
+		] }));
+		elements.steps.querySelectorAll(".step")[0].click();
+		assert.match(elements.insp.innerHTML, /jv-node/);
+		assert.match(elements.insp.innerHTML, /retries/);
 	});
 });
 
