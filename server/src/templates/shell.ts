@@ -246,6 +246,27 @@ const STYLE = `
 	.pin-note { display: flex; align-items: center; gap: 6px; font-family: var(--mono); font-size: 10.5px; color: var(--accent-ink); margin-bottom: 10px; }
 	.pin-note button { font: inherit; color: var(--ink-3); background: transparent; border: 0; cursor: pointer; text-decoration: underline; margin-left: auto; }
 
+	.harness-graph-wrap { position: relative; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel-2); overflow: hidden; height: 72vh; min-height: 420px; }
+	.harness-toolbar { position: absolute; top: 10px; right: 10px; z-index: 2; display: flex; gap: 6px; }
+	.harness-toolbar .iconbtn { width: 30px; height: 30px; margin-left: 0; }
+	.harness-toolbar .iconbtn svg { width: 15px; height: 15px; }
+	.harness-svg { width: 100%; height: 100%; display: block; cursor: grab; touch-action: none; }
+	.harness-svg.panning { cursor: grabbing; }
+	.harness-svg.dim .h-node:not(.hl) { opacity: 0.32; transition: opacity .15s; }
+	.h-group-box { fill: var(--panel); stroke: var(--line); stroke-width: 1; }
+	.h-group-label { font: 600 11px var(--mono); fill: var(--ink-3); text-transform: uppercase; letter-spacing: 0.06em; }
+	.h-card-rect { fill: var(--panel); stroke: var(--line-strong); stroke-width: 1; transition: stroke .1s; }
+	.h-node:hover .h-card-rect, .h-node.hl .h-card-rect { stroke: var(--accent); }
+	.h-card { font-family: var(--sans); font-size: 12.5px; color: var(--ink); box-sizing: border-box; height: 100%; padding: 9px 11px; overflow: hidden; }
+	.h-card .h-name { font-weight: 640; font-size: 13px; display: flex; align-items: center; gap: 6px; min-width: 0; }
+	.h-card .h-name > span:first-of-type { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+	.h-card .h-tag { font-size: 9.5px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--ink-3); border: 1px solid var(--line); border-radius: 999px; padding: 0 6px; flex: none; }
+	.h-card .h-desc { color: var(--ink-2); font-size: 11.5px; margin-top: 4px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+	.h-card .h-tools { color: var(--ink-3); font-family: var(--mono); font-size: 10.5px; margin-top: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+	.h-dot { width: 7px; height: 7px; border-radius: 50%; flex: none; }
+	.h-dot.used { background: var(--met); }
+	.h-dot.unused { background: var(--ink-3); opacity: 0.6; }
+
 	@media (max-width: 880px) {
 		.mission { grid-template-columns: 1fr; }
 		.verdict { min-width: 0; }
@@ -339,5 +360,6 @@ export function renderShell(
 	</div>
 </div>
 <script>window.__TETHER_INITIAL__ = ${bootstrap};</script>
+<script src="/vendor/elk.bundled.js" defer></script>
 <script src="/app.js" defer></script>`;
 }

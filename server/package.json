@@ -34,7 +34,7 @@
   "author": "Tether",
   "license": "Apache-2.0",
   "scripts": {
-    "build": "tsc && node scripts/copy-registry-snapshot.mjs",
+    "build": "tsc && node scripts/copy-registry-snapshot.mjs && node scripts/copy-vendor-assets.mjs",
     "prepublishOnly": "npm run build && npm test",
     "start": "node dist/index.js",
     "dev": "npm run build && node dist/index.js",
