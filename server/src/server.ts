@@ -29,6 +29,10 @@ import { currentRegistry, refreshRegistryIfStale } from "./registry.js";
 import type { RegistryEntry } from "./registry.js";
 
 const APP_JS = readFileSync(fileURLToPath(new URL("./static/app.js", import.meta.url)), "utf-8");
+// Vendored, not an npm dependency (see server/src/static/vendor/elkjs-LICENSE.md) -- the Harness
+// graph's client-side layout engine, same approach haydenschmitty/floorplan uses to stay
+// zero-runtime-dependency while still getting a real layered graph layout in the browser.
+const ELK_JS = readFileSync(fileURLToPath(new URL("./static/vendor/elk.bundled.js", import.meta.url)), "utf-8");
 
 interface OtlpSpan {
 	traceId: string;
@@ -317,6 +321,16 @@ export function createTetherServer(db: Database.Database, options: { pluginsRoot
 			return;
 		}
 
+		if (req.method === "GET" && pathname === "/vendor/elk.bundled.js") {
+			try {
+				res.writeHead(200, { "Content-Type": "text/javascript; charset=utf-8" });
+				res.end(ELK_JS);
+			} catch (err) {
+				sendError(res, 500, (err as Error).message);
+			}
+			return;
+		}
+
 		if (req.method === "GET" && pathname === "/fragments/rail") {
 			try {
 				const query = new URLSearchParams((req.url ?? "").split("?")[1] ?? "");
@@ -351,7 +365,7 @@ export function createTetherServer(db: Database.Database, options: { pluginsRoot
 					res.end(renderNotFoundPanel());
 					return;
 				}
-				const body = renderHarnessBody(view);
+				const body = renderHarnessBody(view, getCoverage(db, traceId));
 				res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
 				res.end(body);
 			} catch (err) {
@@ -605,7 +619,7 @@ export function createTetherServer(db: Database.Database, options: { pluginsRoot
 					res.end(body);
 					return;
 				}
-				const body = renderShell(state, "Tether — Harness", rail, renderHarnessBody(view), pluginsBySlot(pluginsRoot));
+				const body = renderShell(state, "Tether — Harness", rail, renderHarnessBody(view, getCoverage(db, traceId)), pluginsBySlot(pluginsRoot));
 				res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
 				res.end(body);
 			} catch (err) {
