@@ -1,42 +1,44 @@
-import type { HarnessView, HarnessSkillView, HarnessSubAgentView, HarnessMcpServerView } from "../harness.js";
+import type { HarnessView } from "../harness.js";
+import type { CoverageView } from "../coverage.js";
 
 function escapeHtml(s: string): string {
 	return s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c] as string));
 }
 
-function skillItem(s: HarnessSkillView): string {
-	return `<li class="entry">
-		<div class="entry-name">${escapeHtml(s.name)}<span class="tag">${s.source === "user" ? "user" : "project"}</span></div>
-		<div class="entry-desc">${escapeHtml(s.description)}</div>
-	</li>`;
-}
-
-function subAgentItem(a: HarnessSubAgentView): string {
-	const tools = a.tools.length ? `<div class="entry-tools">Tools: ${a.tools.map(escapeHtml).join(", ")}</div>` : "";
-	return `<li class="entry">
-		<div class="entry-name">${escapeHtml(a.name)}</div>
-		<div class="entry-desc">${escapeHtml(a.description)}</div>
-		${tools}
-	</li>`;
-}
-
-function mcpItem(m: HarnessMcpServerView): string {
-	return `<li class="entry"><div class="entry-name">${escapeHtml(m.name)}</div></li>`;
-}
-
-function section(title: string, count: number, itemsHtml: string, emptyMessage: string): string {
-	const body = count > 0 ? `<ul class="entries">${itemsHtml}</ul>` : `<p class="empty">${emptyMessage}</p>`;
-	return `<section class="card">
-		<div class="card-head"><h2>${title} <span class="count">${count}</span></h2></div>
-		${body}
-	</section>`;
-}
+const ICON_ZOOM_OUT = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M5 12h14"/></svg>';
+const ICON_ZOOM_IN = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>';
+const ICON_ZOOM_FIT = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg>';
 
 /** The harness panel's body for one run. The caller (server.ts) guarantees `view` is non-null --
- * an unknown traceId is handled generically via shell.ts's renderNotFoundPanel, not here. */
-export function renderHarnessBody(view: HarnessView): string {
-	return `<p class="as-of">Harness as of: <strong>${escapeHtml(view.goal)}</strong> · ${escapeHtml(view.startedAt)}</p>
-	${section("Skills", view.skills.length, view.skills.map(skillItem).join(""), "No skills discovered for this run.")}
-	${section("Sub-agents", view.subAgents.length, view.subAgents.map(subAgentItem).join(""), "No sub-agents discovered for this run.")}
-	${section("MCP servers", view.mcpServers.length, view.mcpServers.map(mcpItem).join(""), "No MCP servers discovered for this run.")}`;
+ * an unknown traceId is handled generically via shell.ts's renderNotFoundPanel, not here.
+ *
+ * Renders only a skeleton (toolbar + empty `<svg>` canvas) plus a `#harness-data` JSON island --
+ * app.ts's mountHarnessPanel lays the skills/sub-agents/MCP-server entries out as a grouped
+ * node-link map (ELK.js, vendored, see static/vendor/elk.bundled.js) and draws the actual cards
+ * client-side, the same division of labor flight-recorder.ts's `#run-data` island already uses
+ * for the Detail panel. `coverage` feeds each card's used/not-used dot; it's optional (null when
+ * the caller has none available) since not every route that can render this panel also computes
+ * coverage, unlike the harness view itself which always exists once a run does. */
+export function renderHarnessBody(view: HarnessView, coverage: CoverageView | null = null): string {
+	const header = `<p class="as-of">Harness as of: <strong>${escapeHtml(view.goal)}</strong> · ${escapeHtml(view.startedAt)}</p>`;
+	const total = view.skills.length + view.subAgents.length + view.mcpServers.length;
+	if (total === 0) {
+		return `${header}<p class="empty">No skills, sub-agents, or MCP servers discovered for this run.</p>`;
+	}
+
+	// `<` is escaped the same way shell.ts's bootstrap script and flight-recorder.ts's `#run-data`
+	// island already do -- an attacker-controlled skill/sub-agent/tool name containing "</script>"
+	// must not be able to close this element early.
+	const json = JSON.stringify({ harness: view, coverage }).replace(/</g, "\\u003c");
+
+	return `${header}
+<div class="harness-graph-wrap" id="harnessGraphWrap">
+	<div class="harness-toolbar">
+		<button type="button" class="iconbtn" id="hGraphZoomOut" title="Zoom out" aria-label="Zoom out">${ICON_ZOOM_OUT}</button>
+		<button type="button" class="iconbtn" id="hGraphZoomFit" title="Fit to screen" aria-label="Fit to screen">${ICON_ZOOM_FIT}</button>
+		<button type="button" class="iconbtn" id="hGraphZoomIn" title="Zoom in" aria-label="Zoom in">${ICON_ZOOM_IN}</button>
+	</div>
+	<svg id="hGraphSvg" class="harness-svg" xmlns="http://www.w3.org/2000/svg"><g id="hGraphViewport"></g></svg>
+</div>
+<script type="application/json" id="harness-data">${json}</script>`;
 }

@@ -460,6 +460,255 @@ function mountDetailPanel(runData: RunData): () => void {
 	};
 }
 
+// ---------- Harness graph (ELK.js-laid-out map of skills/sub-agents/MCP servers) ----------
+
+// elk.bundled.js (vendored, loaded as a classic <script> before this file -- see shell.ts) attaches
+// a global `ELK` constructor. Declared ambiently rather than imported for the same reason this
+// whole file has no import/export statements of its own (see the top-of-file note): an `import`
+// here would force module treatment and break the classic-script contract.
+declare const ELK: new () => { layout(graph: unknown): Promise<ElkLayoutNode> };
+
+interface ElkLayoutNode {
+	id: string;
+	x?: number;
+	y?: number;
+	width?: number;
+	height?: number;
+	children?: ElkLayoutNode[];
+}
+
+type HarnessData = {
+	harness: import("../harness.js").HarnessView;
+	coverage: import("../coverage.js").CoverageView | null;
+};
+
+interface HGraphItem {
+	id: string;
+	kind: "skill" | "subagent" | "mcp";
+	name: string;
+	description?: string;
+	tag?: string;
+	tools?: string[];
+	used: boolean | null; // null when coverage isn't tracked for this run
+	height: number;
+}
+
+interface HGraphGroup {
+	id: string;
+	label: string;
+	items: HGraphItem[];
+}
+
+const H_CARD_W = 236;
+const H_CARD_GAP = 14;
+
+function coverageUsed(coverage: HarnessData["coverage"], type: "skill" | "sub_agent" | "mcp_server", name: string): boolean | null {
+	if (!coverage || !coverage.tracked) return null;
+	const entry = coverage.entries.find((e) => e.type === type && e.name === name);
+	return entry ? entry.usedCount > 0 : false;
+}
+
+function buildHarnessGroups(data: HarnessData): HGraphGroup[] {
+	const { harness, coverage } = data;
+	const groups: HGraphGroup[] = [
+		{
+			id: "skills", label: "Skills",
+			items: harness.skills.map((s) => ({
+				id: "skill:" + s.name, kind: "skill", name: s.name, description: s.description, tag: s.source,
+				used: coverageUsed(coverage, "skill", s.name), height: 80,
+			})),
+		},
+		{
+			id: "subagents", label: "Sub-agents",
+			items: harness.subAgents.map((a) => ({
+				id: "subagent:" + a.name, kind: "subagent", name: a.name, description: a.description, tools: a.tools,
+				used: coverageUsed(coverage, "sub_agent", a.name), height: a.tools.length ? 96 : 80,
+			})),
+		},
+		{
+			id: "mcp", label: "MCP servers",
+			items: harness.mcpServers.map((m) => ({
+				id: "mcp:" + m.name, kind: "mcp", name: m.name,
+				used: coverageUsed(coverage, "mcp_server", m.name), height: 44,
+			})),
+		},
+	];
+	return groups.filter((g) => g.items.length > 0);
+}
+
+/** None of the three categories reference each other or their own siblings (no composition/handoff
+ * data exists yet, see mcp/src/manifest.ts's known gaps) -- so there are no edges to lay out, only
+ * unconnected cards to pack. ELK's "box" algorithm (rectangle packing, no edge routing) is exactly
+ * that, applied twice: once to arrange the three category boxes, once per category to arrange its
+ * cards. If a handoff graph ever exists, giving the inner graphs real edges and switching their
+ * algorithm to "layered" is additive -- this packing shape doesn't need to change. */
+function harnessElkGraph(groups: HGraphGroup[]): unknown {
+	return {
+		id: "root",
+		layoutOptions: { "elk.algorithm": "box", "elk.spacing.nodeNode": "28", "elk.padding": "[top=16,left=16,bottom=16,right=16]" },
+		children: groups.map((g) => ({
+			id: g.id,
+			layoutOptions: { "elk.algorithm": "box", "elk.spacing.nodeNode": String(H_CARD_GAP), "elk.padding": "[top=34,left=16,bottom=16,right=16]" },
+			children: g.items.map((it) => ({ id: it.id, width: H_CARD_W, height: it.height })),
+		})),
+	};
+}
+
+function hDotHtml(used: boolean | null): string {
+	if (used === null) return "";
+	const title = used ? "Used at least once in this run" : "Registered but not used in this run";
+	return `<span class="h-dot ${used ? "used" : "unused"}" title="${title}"></span>`;
+}
+
+function harnessCardInnerHtml(item: HGraphItem): string {
+	if (item.kind === "mcp") {
+		return `<div class="h-name">${hDotHtml(item.used)}<span>${escapeHtml(item.name)}</span></div>`;
+	}
+	const tagHtml = item.tag ? `<span class="h-tag">${escapeHtml(item.tag)}</span>` : "";
+	const descHtml = item.description ? `<div class="h-desc" title="${escapeHtml(item.description)}">${escapeHtml(item.description)}</div>` : "";
+	const toolsHtml = item.tools && item.tools.length
+		? `<div class="h-tools" title="${escapeHtml(item.tools.join(", "))}">Tools: ${escapeHtml(item.tools.join(", "))}</div>`
+		: "";
+	return `<div class="h-name">${hDotHtml(item.used)}<span title="${escapeHtml(item.name)}">${escapeHtml(item.name)}</span>${tagHtml}</div>${descHtml}${toolsHtml}`;
+}
+
+/** Renders the laid-out graph into #hGraphViewport and returns its full content bounding box
+ * (for the Fit button / initial view). `layout` is the root ElkLayoutNode elk.layout() resolved. */
+function renderHarnessGraph(viewport: SVGGElement, groups: HGraphGroup[], layout: ElkLayoutNode): { width: number; height: number } {
+	const byId = new Map(groups.map((g) => [g.id, g]));
+	let html = "";
+	(layout.children || []).forEach((gLayout) => {
+		const group = byId.get(gLayout.id);
+		if (!group) return;
+		const gx = gLayout.x || 0, gy = gLayout.y || 0, gw = gLayout.width || 0, gh = gLayout.height || 0;
+		const itemsById = new Map(group.items.map((it) => [it.id, it]));
+		html += `<rect class="h-group-box" x="${gx}" y="${gy}" width="${gw}" height="${gh}" rx="14"></rect>`;
+		html += `<text class="h-group-label" x="${gx + 16}" y="${gy + 22}">${escapeHtml(group.label)} · ${group.items.length}</text>`;
+		(gLayout.children || []).forEach((cLayout) => {
+			const item = itemsById.get(cLayout.id);
+			if (!item) return;
+			const nx = gx + (cLayout.x || 0), ny = gy + (cLayout.y || 0), nw = cLayout.width || H_CARD_W, nh = cLayout.height || item.height;
+			html += `<g class="h-node" data-id="${escapeHtml(item.id)}">`
+				+ `<rect class="h-card-rect" x="${nx}" y="${ny}" width="${nw}" height="${nh}" rx="10"></rect>`
+				+ `<foreignObject x="${nx}" y="${ny}" width="${nw}" height="${nh}"><div xmlns="http://www.w3.org/1999/xhtml" class="h-card">${harnessCardInnerHtml(item)}</div></foreignObject>`
+				+ `</g>`;
+		});
+	});
+	viewport.innerHTML = html;
+	return { width: layout.width || 0, height: layout.height || 0 };
+}
+
+/** Mounts the Harness panel's graph into the skeleton renderHarnessBody put in #content, using the
+ * `#harness-data` island. Returns an unmount function the router calls before the next navigation,
+ * same contract as mountDetailPanel -- here it only needs to drop this panel's pointer/wheel
+ * listeners off #hGraphSvg (window/document-level listeners would otherwise outlive the panel). */
+function mountHarnessPanel(data: HarnessData): () => void {
+	const wrapEl = document.getElementById("harnessGraphWrap");
+	const svgElOrNull = document.getElementById("hGraphSvg") as (SVGSVGElement & HTMLElement) | null;
+	const viewportOrNull = document.getElementById("hGraphViewport") as unknown as SVGGElement | null;
+	if (!wrapEl || !svgElOrNull || !viewportOrNull) return () => {};
+	// Rebound to const bindings TypeScript can prove non-null inside the closures below -- the
+	// guard above doesn't narrow across a nested function declaration (same pattern/reason as
+	// initWidgetDashboard's `const grid = gridEl;` above).
+	const wrap = wrapEl, svgEl = svgElOrNull, viewport = viewportOrNull;
+
+	const groups = buildHarnessGroups(data);
+	let content = { width: 0, height: 0 };
+	let t = { x: 0, y: 0, k: 1 };
+	let dragging = false, dragLast = { x: 0, y: 0 };
+
+	function applyTransform(): void {
+		viewport.setAttribute("transform", `translate(${t.x} ${t.y}) scale(${t.k})`);
+	}
+
+	function fit(): void {
+		if (!content.width || !content.height) return;
+		const rect = wrap.getBoundingClientRect();
+		const k = Math.min((rect.width - 40) / content.width, (rect.height - 40) / content.height, 1.4);
+		t = { k, x: (rect.width - content.width * k) / 2, y: (rect.height - content.height * k) / 2 };
+		applyTransform();
+	}
+
+	function zoomBy(factor: number): void {
+		const rect = wrap.getBoundingClientRect();
+		const cx = rect.width / 2, cy = rect.height / 2;
+		const k = Math.max(0.15, Math.min(3, t.k * factor));
+		t = { k, x: cx - ((cx - t.x) / t.k) * k, y: cy - ((cy - t.y) / t.k) * k };
+		applyTransform();
+	}
+
+	function onWheel(e: WheelEvent): void {
+		e.preventDefault();
+		const rect = svgEl.getBoundingClientRect();
+		const cx = e.clientX - rect.left, cy = e.clientY - rect.top;
+		const k = Math.max(0.15, Math.min(3, t.k * (e.deltaY < 0 ? 1.1 : 0.9)));
+		t = { k, x: cx - ((cx - t.x) / t.k) * k, y: cy - ((cy - t.y) / t.k) * k };
+		applyTransform();
+	}
+	function onPointerDown(e: PointerEvent): void {
+		if (e.button !== 0) return;
+		dragging = true; dragLast = { x: e.clientX, y: e.clientY };
+		svgEl.classList.add("panning");
+		svgEl.setPointerCapture(e.pointerId);
+	}
+	function onPointerMove(e: PointerEvent): void {
+		if (!dragging) return;
+		t = { ...t, x: t.x + (e.clientX - dragLast.x), y: t.y + (e.clientY - dragLast.y) };
+		dragLast = { x: e.clientX, y: e.clientY };
+		applyTransform();
+	}
+	function onPointerUp(): void { dragging = false; svgEl.classList.remove("panning"); }
+	function onNodeEnter(e: Event): void {
+		const node = (e.target as Element).closest(".h-node");
+		if (!node) return;
+		svgEl.classList.add("dim");
+		node.classList.add("hl");
+	}
+	function onNodeLeave(e: Event): void {
+		const node = (e.target as Element).closest(".h-node");
+		if (!node) return;
+		svgEl.classList.remove("dim");
+		node.classList.remove("hl");
+	}
+
+	svgEl.addEventListener("wheel", onWheel, { passive: false });
+	svgEl.addEventListener("pointerdown", onPointerDown);
+	svgEl.addEventListener("pointermove", onPointerMove);
+	svgEl.addEventListener("pointerup", onPointerUp);
+	svgEl.addEventListener("pointerleave", onPointerUp);
+	svgEl.addEventListener("pointerover", onNodeEnter);
+	svgEl.addEventListener("pointerout", onNodeLeave);
+	document.getElementById("hGraphZoomIn")?.addEventListener("click", () => zoomBy(1.25));
+	document.getElementById("hGraphZoomOut")?.addEventListener("click", () => zoomBy(0.8));
+	document.getElementById("hGraphZoomFit")?.addEventListener("click", fit);
+
+	new ELK().layout(harnessElkGraph(groups)).then((layout) => {
+		content = renderHarnessGraph(viewport, groups, layout);
+		fit();
+	});
+
+	return function unmount(): void {
+		svgEl.removeEventListener("wheel", onWheel);
+		svgEl.removeEventListener("pointerdown", onPointerDown);
+		svgEl.removeEventListener("pointermove", onPointerMove);
+		svgEl.removeEventListener("pointerup", onPointerUp);
+		svgEl.removeEventListener("pointerleave", onPointerUp);
+		svgEl.removeEventListener("pointerover", onNodeEnter);
+		svgEl.removeEventListener("pointerout", onNodeLeave);
+	};
+}
+
+/** Mounts the embedded #harness-data island if present (an empty-categories harness panel has
+ * none -- renderHarnessBody skips straight to the empty-state message in that case). Mirrors
+ * mountRunDataIfPresent's null-if-absent contract. */
+function mountHarnessIfPresent(): void {
+	const dataEl = document.getElementById("harness-data");
+	if (!dataEl) return;
+	const data = JSON.parse(dataEl.textContent || "null") as HarnessData | null;
+	if (!data) return;
+	currentUnmount = mountHarnessPanel(data);
+}
+
 // ---------- Router ----------
 
 interface ShellState {
@@ -919,6 +1168,7 @@ async function navigateTo(pathname: string, push: boolean): Promise<void> {
 		resolvedTraceId = mountRunDataIfPresent() ?? mountCompositionDataIfPresent() ?? target.traceId;
 	} else if (target.view === "harness") {
 		document.title = "Tether — Harness";
+		mountHarnessIfPresent();
 	} else {
 		document.title = "Tether — Analytics";
 		void initWidgetDashboard();
@@ -981,6 +1231,7 @@ function init(): void {
 	// instead of #run-data, and needs the same client-side mount to actually show its entries --
 	// this is the one hydration path navigateTo's fetch-based branch never runs for.
 	if (currentState.view === "detail") mountRunDataIfPresent() ?? mountCompositionDataIfPresent();
+	if (currentState.view === "harness") mountHarnessIfPresent();
 	if (currentState.view === "analytics") void initWidgetDashboard();
 	setPluginPickerVisibility(currentState.view);
 }

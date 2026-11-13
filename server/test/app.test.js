@@ -1104,3 +1104,116 @@ describe("composition-only sessions", () => {
 		assert.match(elements.compositionEntries.innerHTML, /superpowers:brainstorming/);
 	});
 });
+
+// These test the pure data-shaping helpers behind the Harness graph (grouping, coverage lookup,
+// card markup/escaping) without going through mountHarnessPanel itself -- that function calls
+// `new ELK()`, and this sandbox (unlike a real page, which loads elk.bundled.js as a classic
+// <script> before app.js, see shell.ts) has no ELK global, so driving a full mount here would
+// just be testing this test file's own stub rather than app.ts's logic.
+describe("Harness graph: coverageUsed", () => {
+	test("returns null when there's no coverage view at all (nothing tracked)", () => {
+		const { sandbox } = loadApp();
+		assert.equal(sandbox.coverageUsed(null, "skill", "code-review"), null);
+	});
+
+	test("returns null when coverage exists but wasn't tracked for this run", () => {
+		const { sandbox } = loadApp();
+		assert.equal(sandbox.coverageUsed({ tracked: false, entries: [] }, "skill", "code-review"), null);
+	});
+
+	test("returns true/false based on usedCount when tracked", () => {
+		const { sandbox } = loadApp();
+		const coverage = {
+			tracked: true,
+			entries: [
+				{ type: "skill", name: "code-review", usedCount: 3 },
+				{ type: "skill", name: "unused-skill", usedCount: 0 },
+			],
+		};
+		assert.equal(sandbox.coverageUsed(coverage, "skill", "code-review"), true);
+		assert.equal(sandbox.coverageUsed(coverage, "skill", "unused-skill"), false);
+	});
+
+	test("an entry absent from a tracked coverage view counts as not used, not null", () => {
+		const { sandbox } = loadApp();
+		assert.equal(sandbox.coverageUsed({ tracked: true, entries: [] }, "mcp_server", "github"), false);
+	});
+});
+
+describe("Harness graph: buildHarnessGroups", () => {
+	function harness(overrides = {}) {
+		return { traceId: "t".repeat(32), goal: "g", startedAt: "", skills: [], subAgents: [], mcpServers: [], ...overrides };
+	}
+
+	test("omits a category entirely when it has zero entries, instead of an empty group", () => {
+		const { sandbox } = loadApp();
+		const groups = sandbox.buildHarnessGroups({ harness: harness({ mcpServers: [{ name: "github" }] }), coverage: null });
+		// groups is an array from the sandbox's separate vm realm -- deepEqual against a host-realm
+		// array literal fails on Array.prototype identity alone (same cross-realm issue
+		// parsePathname's own JSON round-trip above works around), so compare primitives directly.
+		assert.equal(groups.length, 1);
+		assert.equal(groups[0].id, "mcp");
+	});
+
+	test("builds one group per non-empty category, each item carrying its used state from coverage", () => {
+		const { sandbox } = loadApp();
+		const coverage = { tracked: true, entries: [{ type: "skill", name: "code-review", usedCount: 1 }] };
+		const groups = sandbox.buildHarnessGroups({
+			harness: harness({ skills: [{ name: "code-review", description: "reviews diffs", source: "project" }] }),
+			coverage,
+		});
+		assert.equal(groups.length, 1);
+		assert.equal(groups[0].id, "skills");
+		assert.equal(groups[0].items[0].id, "skill:code-review");
+		assert.equal(groups[0].items[0].used, true);
+	});
+
+	test("a sub-agent with tools gets a taller card than one without", () => {
+		const { sandbox } = loadApp();
+		const groups = sandbox.buildHarnessGroups({
+			harness: harness({
+				subAgents: [
+					{ name: "with-tools", description: "d", tools: ["Bash"] },
+					{ name: "no-tools", description: "d", tools: [] },
+				],
+			}),
+			coverage: null,
+		});
+		const [withTools, noTools] = groups[0].items;
+		assert.ok(withTools.height > noTools.height);
+	});
+});
+
+describe("Harness graph: card markup escaping", () => {
+	test("harnessCardInnerHtml escapes a hostile skill name and description", () => {
+		const { sandbox } = loadApp();
+		const html = sandbox.harnessCardInnerHtml({
+			id: "skill:x", kind: "skill", name: "<script>alert(1)</script>", description: "<img src=x onerror=alert(1)>", tag: "project", used: null, height: 80,
+		});
+		assert.doesNotMatch(html, /<script>alert\(1\)<\/script>/);
+		assert.doesNotMatch(html, /<img src=x/);
+		assert.match(html, /&lt;script&gt;/);
+	});
+
+	test("an MCP server card has no description/tools section", () => {
+		const { sandbox } = loadApp();
+		const html = sandbox.harnessCardInnerHtml({ id: "mcp:github", kind: "mcp", name: "github", used: true, height: 44 });
+		assert.match(html, /github/);
+		assert.doesNotMatch(html, /h-desc/);
+		assert.doesNotMatch(html, /h-tools/);
+	});
+
+	test("hDotHtml renders nothing when used is null (coverage not tracked)", () => {
+		const { sandbox } = loadApp();
+		assert.equal(sandbox.hDotHtml(null), "");
+		assert.match(sandbox.hDotHtml(true), /h-dot used/);
+		assert.match(sandbox.hDotHtml(false), /h-dot unused/);
+	});
+});
+
+describe("mountHarnessIfPresent", () => {
+	test("does nothing when there's no #harness-data island (e.g. an empty-categories harness panel)", () => {
+		const { sandbox } = loadApp();
+		assert.doesNotThrow(() => sandbox.mountHarnessIfPresent());
+	});
+});
