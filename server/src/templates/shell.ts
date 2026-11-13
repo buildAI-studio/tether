@@ -257,7 +257,7 @@ const STYLE = `
 	.harness-toolbar .iconbtn svg { width: 15px; height: 15px; }
 	.harness-svg { width: 100%; height: 100%; display: block; cursor: grab; touch-action: none; }
 	.harness-svg.panning { cursor: grabbing; }
-	.harness-svg.dim .h-node:not(.hl) { opacity: 0.32; transition: opacity .15s; }
+	.harness-svg.dim .h-node:not(.hl) { opacity: 0.7; transition: opacity .15s; }
 	.h-group-box { fill: var(--panel); stroke: var(--line); stroke-width: 1; }
 	.h-group-label { font: 600 11px var(--sans); fill: var(--ink-3); }
 	.h-card-rect { fill: var(--panel); stroke: var(--line-strong); stroke-width: 1; transition: stroke .1s; }
