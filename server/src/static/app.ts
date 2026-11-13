@@ -142,7 +142,7 @@ function renderDiffs(diffs: { path: string; diff: string; hunksShown: number; hu
 				: "The last hunk shown is cut mid-way — this diff is not complete.";
 		}
 
-		return '<div class="io-kind">' + escapeHtml(d.path) + "</div>"
+		return '<div class="io-kind io-id">' + escapeHtml(d.path) + "</div>"
 			+ (banner ? '<div class="diff-banner">' + escapeHtml(banner) + "</div>" : "")
 			+ '<div class="io-diff">' + lines + "</div>";
 	}).join("");
@@ -352,7 +352,7 @@ function mountDetailPanel(runData: RunData): () => void {
 			if (sg.argsDiff) {
 				block += sg.argsDiff.length
 					? '<div class="argdiff">' + sg.argsDiff.map((d) =>
-						'<div class="argdiff-row"><div class="io-kind">' + escapeHtml(d.key) + '</div>'
+						'<div class="argdiff-row"><div class="io-kind io-id">' + escapeHtml(d.key) + '</div>'
 						+ '<div class="argdiff-vals">'
 						+ '<div><div class="io-kind">Before</div><div class="io-json">' + renderJsonNode(d.before) + '</div></div>'
 						+ '<div><div class="io-kind">After</div><div class="io-json">' + renderJsonNode(d.after) + '</div></div>'
@@ -1087,7 +1087,7 @@ function renderCompositionEntry(e: CompositionEntry): string {
 		+ '<span class="stat-chip" style="color:var(--ink-3);background:var(--panel-2)">' + escapeHtml(e.kind) + "</span>"
 		+ "<strong>" + escapeHtml(label) + "</strong>"
 		+ "</div>"
-		+ '<div class="io-kind" style="margin-top:6px;text-transform:none;letter-spacing:normal">' + metaBits.join(" · ") + "</div>"
+		+ '<div class="io-kind io-id" style="margin-top:6px;text-transform:none;letter-spacing:normal">' + metaBits.join(" · ") + "</div>"
 		+ preview
 		+ "</div>";
 }
