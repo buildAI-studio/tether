@@ -30,9 +30,9 @@ export function renderNotFoundPanel(): string {
 
 const STYLE = `
 	:root {
-		--bg: #F7F6F2; --panel: #FFFFFF; --panel-2: #FBFAF7; --line: #E6E3DB; --line-strong: #D6D2C7;
-		--ink: #1B1F24; --ink-2: #565C64; --ink-3: #8A8F97;
-		--accent: #0FA6B4; --accent-ink: #0B7C87; --accent-wash: rgba(15,166,180,0.10);
+		--bg: #F4F5F7; --panel: #FFFFFF; --panel-2: #EEF0F3; --line: #E1E4E9; --line-strong: #D2D6DD;
+		--ink: #16181D; --ink-2: #585F6B; --ink-3: #8D93A1;
+		--accent: #2F6FED; --accent-ink: #1E4FD1; --accent-wash: rgba(47,111,237,0.10);
 		--met: #2FA24A; --partial: #C08810; --failed: #DC4A38; --stuck: #E0761A;
 		--met-wash: rgba(47,162,74,0.12); --partial-wash: rgba(192,136,16,0.12); --failed-wash: rgba(220,74,56,0.12);
 		--stuck-wash: rgba(224,118,26,0.15);
@@ -43,9 +43,9 @@ const STYLE = `
 	}
 	@media (prefers-color-scheme: dark) {
 		:root {
-			--bg: #0E1116; --panel: #161B22; --panel-2: #1A2029; --line: #262D38; --line-strong: #333C49;
-			--ink: #E8ECF1; --ink-2: #A3ACB8; --ink-3: #6C7683;
-			--accent: #19C6D8; --accent-ink: #57DCEA; --accent-wash: rgba(25,198,216,0.12);
+			--bg: #0B0D12; --panel: #12151B; --panel-2: #171B22; --line: #242932; --line-strong: #323945;
+			--ink: #E7E9EE; --ink-2: #9BA2B0; --ink-3: #646B79;
+			--accent: #5B9DFF; --accent-ink: #8FC3FF; --accent-wash: rgba(91,157,255,0.14);
 			--met: #3FB950; --partial: #D9A21B; --failed: #F0533F; --stuck: #F0871E;
 			--met-wash: rgba(63,185,80,0.15); --partial-wash: rgba(217,162,27,0.15); --failed-wash: rgba(240,83,63,0.15);
 			--stuck-wash: rgba(240,135,30,0.16);
@@ -53,18 +53,18 @@ const STYLE = `
 		}
 	}
 	:root[data-theme="light"] {
-		--bg: #F7F6F2; --panel: #FFFFFF; --panel-2: #FBFAF7; --line: #E6E3DB; --line-strong: #D6D2C7;
-		--ink: #1B1F24; --ink-2: #565C64; --ink-3: #8A8F97;
-		--accent: #0FA6B4; --accent-ink: #0B7C87; --accent-wash: rgba(15,166,180,0.10);
+		--bg: #F4F5F7; --panel: #FFFFFF; --panel-2: #EEF0F3; --line: #E1E4E9; --line-strong: #D2D6DD;
+		--ink: #16181D; --ink-2: #585F6B; --ink-3: #8D93A1;
+		--accent: #2F6FED; --accent-ink: #1E4FD1; --accent-wash: rgba(47,111,237,0.10);
 		--met: #2FA24A; --partial: #C08810; --failed: #DC4A38; --stuck: #E0761A;
 		--met-wash: rgba(47,162,74,0.12); --partial-wash: rgba(192,136,16,0.12); --failed-wash: rgba(220,74,56,0.12);
 		--stuck-wash: rgba(224,118,26,0.15);
 		--shadow: 0 1px 2px rgba(20,24,28,0.05), 0 8px 24px rgba(20,24,28,0.06);
 	}
 	:root[data-theme="dark"] {
-		--bg: #0E1116; --panel: #161B22; --panel-2: #1A2029; --line: #262D38; --line-strong: #333C49;
-		--ink: #E8ECF1; --ink-2: #A3ACB8; --ink-3: #6C7683;
-		--accent: #19C6D8; --accent-ink: #57DCEA; --accent-wash: rgba(25,198,216,0.12);
+		--bg: #0B0D12; --panel: #12151B; --panel-2: #171B22; --line: #242932; --line-strong: #323945;
+		--ink: #E7E9EE; --ink-2: #9BA2B0; --ink-3: #646B79;
+		--accent: #5B9DFF; --accent-ink: #8FC3FF; --accent-wash: rgba(91,157,255,0.14);
 		--met: #3FB950; --partial: #D9A21B; --failed: #F0533F; --stuck: #F0871E;
 		--met-wash: rgba(63,185,80,0.15); --partial-wash: rgba(217,162,27,0.15); --failed-wash: rgba(240,83,63,0.15);
 		--stuck-wash: rgba(240,135,30,0.16);
