@@ -1,10 +1,20 @@
 # Tether
 
-Agent harness observability, self-hosted and open-source. Sibling to
-[Trail](https://trailai.dev) (private repo `tmam-dev/trail`, MENA enterprise
-AI observability SaaS) — same team, same OpenTelemetry `gen_ai.*`
-instrumentation, but narrow-wedge scoped to agent-harness observability only
-(no guardrails/evals/vault/billing, which stay proprietary in Trail).
+Agent harness observability, self-hosted and open-source. Lives on GitHub at
+`buildAI-studio/tether` (moved from `tmam-dev/tether` — old remote URLs still
+push/redirect, but `gh pr create` and similar tooling need the local `origin`
+remote repointed to `buildAI-studio/tether` first, or they fail with a
+confusing GraphQL error). Sibling to [Trail](https://trailai.dev) (private
+repo `tmam-dev/trail`, MENA enterprise AI observability SaaS) — same team,
+same OpenTelemetry `gen_ai.*` instrumentation, but narrow-wedge scoped to
+agent-harness observability only (no guardrails/evals/vault/billing, which
+stay proprietary in Trail).
+
+Several files still point at the old `tmam-dev/tether` location
+(`server/package.json`'s `homepage`/`bugs`/`repository`,
+`server/src/registry.ts`'s `DEFAULT_REGISTRY_URL`, and a couple of
+`docs/superpowers/plans/` snapshots) — left alone for now since fixing them
+touches published npm metadata and a live CDN URL, not just documentation.
 
 Two packages:
 - `mcp/` — published to npm as `trailai-mcp`. MCP server coding agents
